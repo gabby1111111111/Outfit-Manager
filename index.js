@@ -8,7 +8,7 @@
 (function () {
 
     var SCRIPT_NAME = '穿搭管理';
-    var OM_VERSION = '21.3.6';
+    var OM_VERSION = '21.3.7';
     var BTN_ID = 'outfit-mgr-ext-btn-v4';
     var DB_NAME = 'outfit_mgr_db';
     var DB_VERSION = 1;
@@ -2060,9 +2060,23 @@
         }
         if (!styleGuide) { console.log("[OM-AI] styleGuide empty, fallback"); callback(null); return; }
         console.log("[OM-AI] styleGuide built, len=" + styleGuide.length);
+        var onlyLingerieRefs = modernRefs.length === 0 && lingerieRefs.length > 0;
+        var onlyModernRefs = modernRefs.length > 0 && lingerieRefs.length === 0;
         
         // System prompt: rules + format + example
-        var sysPrompt = "你是穿搭助手，必须遵循以下规则：\n- 本次生成对象固定是 User，不是 char。\n- 要根据正文以及前文故事情节判断此时User是否需要更换服饰。\n- 根据User的性格人设，随机生成User的穿搭服饰，需遵循各个风格的穿搭指导，并符合当前人物所处的情境，季节（冬秋季时需要在原来的基础上增衣保暖，春夏季需保持清凉），职业（避免出现在工作时穿着不当的情况）和喜好，避免ooc。发挥想象即可，穿搭风格均不限。\n- char的人设和聊天记录只作为剧情/关系/场合参考，不要给char生成穿搭。\n- 严禁照抄例子，例子仅供穿搭参考。\n- 只输出User穿搭结果，禁止输出或续写任何 <horae>、<content>、<details>、<status> 等状态标签或剧情标签。\n输出格式：第一行只输出风格名（从上述参考风格中选一个最符合的），然后换行输出具体穿搭描述，不能抄已有的例子，不要额外说明。\n输出例子：<甜酷风>\n上衣：黑色露肩印花短款T恤（露锁骨设计）\n下装：灰紫色层层蛋糕蓬蓬短裙（不规则蕾丝纱质裙摆）\n配饰：黑色猫耳发筯、骷髅元素链条choker、金属多层手链、黑色链条腋下包\n鞋袜：黑灰条纹过膝堆堆长袜、厚底黑色圆头松糕鞋";
+        var outputScopeRule = "";
+        var outputExample = "";
+        if (modernRefs.length === 0 && lingerieRefs.length > 0) {
+            outputScopeRule = "- 当前只选中了内衣类世界书，本次只能生成User的内衣/贴身衣物，不得生成外穿服装。\n- 禁止输出这些外穿字段：上衣、下装、裙装、连衣裙、外套、外搭、鞋袜、鞋子、袜子。\n- 输出字段优先使用：文胸、内裤、配件；如果世界书有“一体式/抹胸式”等结构，也必须保持内衣语境。";
+            outputExample = "输出例子：<基础纯棉>\n文胸：浅灰色纯棉运动背心式文胸（工字背设计，固定杯垫，亲肤透气）\n内裤：同色纯棉中腰平角内裤（腰头柔软，包裹感稳定）";
+        } else if (modernRefs.length > 0 && lingerieRefs.length === 0) {
+            outputScopeRule = "- 当前只选中了外穿类世界书，本次只能生成User的外穿搭配，不得生成内衣。\n- 禁止输出这些内衣字段：文胸、内裤、情趣内衣、内衣套装。";
+            outputExample = "输出例子：<甜酷风>\n上衣：黑色露肩印花短款T恤（露锁骨设计）\n下装：灰紫色层层蛋糕蓬蓬短裙（不规则蕾丝纱质裙摆）\n配饰：黑色猫耳发箍、骷髅元素链条choker、金属多层手链、黑色链条腋下包\n鞋袜：黑灰条纹过膝堆堆长袜、厚底黑色圆头松糕鞋";
+        } else {
+            outputScopeRule = "- 当前同时选中了外穿类和内衣类世界书，本次需要分别生成外穿与内衣；外穿只能参考外穿指导，内衣只能参考内衣指导。\n- 不要把内衣风格写成外穿，也不要把外穿风格写成内衣。";
+            outputExample = "输出例子：<甜酷风 + 基础纯棉>\n外穿：\n上衣：黑色露肩印花短款T恤（露锁骨设计）\n下装：灰紫色层层蛋糕蓬蓬短裙（不规则蕾丝纱质裙摆）\n配饰：黑色猫耳发箍、黑色链条腋下包\n鞋袜：黑灰条纹过膝堆堆长袜、厚底黑色圆头松糕鞋\n内衣：\n文胸：浅灰色纯棉运动背心式文胸（工字背设计，固定杯垫）\n内裤：同色纯棉中腰平角内裤（柔软包裹，适合日常活动）";
+        }
+        var sysPrompt = "你是穿搭助手，必须遵循以下规则：\n- 本次生成对象固定是 User，不是 char。\n- 要根据正文以及前文故事情节判断此时User是否需要更换服饰。\n- 根据User的性格人设，随机生成User的穿搭服饰，需遵循各个风格的穿搭指导，并符合当前人物所处的情境，季节（冬秋季时需要在原来的基础上增衣保暖，春夏季需保持清凉），职业（避免出现在工作时穿着不当的情况）和喜好，避免ooc。发挥想象即可，但只能从本次提供的参考风格类型中生成。\n- char的人设和聊天记录只作为剧情/关系/场合参考，不要给char生成穿搭。\n" + outputScopeRule + "\n- 严禁照抄例子，例子仅供穿搭参考。\n- 只输出User穿搭结果，禁止输出或续写任何 <horae>、<content>、<details>、<status> 等状态标签或剧情标签。\n输出格式：第一行只输出风格名（从上述参考风格中选一个最符合的），然后换行输出具体穿搭描述，不能抄已有的例子，不要额外说明。\n" + outputExample;
         
         // User prompt: style guide section + context section
         var userInfo = _getUserInfo(ctx);
@@ -2094,6 +2108,16 @@
             if (!result || typeof result !== "string" || result.trim().length < 5) { console.log("[OM-AI] result too short, fallback"); callback(null); return; }
             var desc = _cleanOutfitResult(result);
             if (!desc || desc.length < 5) { console.log("[OM-AI] cleaned result too short, fallback"); callback(null); return; }
+            if (onlyLingerieRefs && /(?:^|\n)\s*(?:[-*]\s*)?(上衣|下装|裙装|连衣裙|外套|外搭|鞋袜|鞋子|袜子)\s*[：:]/.test(desc)) {
+                console.log("[OM-AI] lingerie-only result contains outerwear fields, fallback");
+                callback(null);
+                return;
+            }
+            if (onlyModernRefs && /(?:^|\n)\s*(?:[-*]\s*)?(文胸|内裤|情趣内衣|内衣套装)\s*[：:]/.test(desc)) {
+                console.log("[OM-AI] outerwear-only result contains lingerie fields, fallback");
+                callback(null);
+                return;
+            }
             var outfit = { id: genId(), name: scene + "搭配", category: "世界书", type: "outfit", description: desc, style: "", season: "", sceneTag: scene, imageData: null, createdAt: Date.now() };
             console.log("[OM-AI] success, outfit desc len=" + desc.length);
             callback([outfit]);
