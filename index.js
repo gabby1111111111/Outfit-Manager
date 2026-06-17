@@ -1080,6 +1080,7 @@
             // 底栏
             '<div class="om-bottombar" id="om-bottombar" style="position:relative;">' +
             '<div class="om-bottom-status" id="om-bottom-status"></div>' +
+            '<button class="om-batch-toggle-btn" id="om-wardrobe-random">衣柜随机</button>' +
             '<button class="om-batch-toggle-btn" id="om-batch-toggle">多选</button>' +
             '<button class="om-bottom-btn" id="om-bottom-presets" title="预设"><i class="fa-solid fa-bookmark"></i></button>' +
             '<button class="om-bottom-btn" id="om-bottom-roll" title="随机搭配"><i class="fa-solid fa-dice"></i></button>' +
@@ -1125,6 +1126,7 @@
 
         // 绑定底栏
         ov.querySelector('#om-bottom-status').addEventListener('click', function () { toggleDetailPanel(); });
+        ov.querySelector('#om-wardrobe-random').addEventListener('click', function () { applyRandomWardrobeOutfit(); });
         ov.querySelector('#om-batch-toggle').addEventListener('click', function () {
             batchMode = !batchMode; batchSelected = [];
             ov.querySelector('#om-batch-toggle').classList.toggle('on', batchMode);
@@ -1146,6 +1148,24 @@
     function closePopup() {
         var ov = document.querySelector('.om-overlay'); if (ov) ov.parentNode.removeChild(ov);
         injectFab();
+    }
+
+    function applyRandomWardrobeOutfit() {
+        var d = load();
+        var outfits = getViewOutfits(d).filter(function (o) {
+            return o && (!o.type || o.type === 'outfit' || o.type === '套装');
+        });
+        if (outfits.length === 0) {
+            toast('当前衣柜还没有可随机的套装', true);
+            return;
+        }
+        var pick = outfits[Math.floor(Math.random() * outfits.length)];
+        setViewActiveIds(d, [pick.id]);
+        save(d);
+        renderGrid();
+        renderBottomStatus();
+        updateBtn();
+        toast('衣柜随机：' + pick.name);
     }
 
 
