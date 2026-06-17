@@ -1007,12 +1007,26 @@
         } catch (e) { worldBookStylesLoaded = true; if (cb) cb(); }
     }
     function loadWorldBookByName(ctx, name) {
-        if (ctx && typeof ctx.loadWorldInfo === 'function') return Promise.resolve(ctx.loadWorldInfo(name));
+        function headers() {
+            try {
+                if (ctx && typeof ctx.getRequestHeaders === 'function') return ctx.getRequestHeaders();
+                if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getRequestHeaders === 'function') return SillyTavern.getRequestHeaders();
+            } catch (e) {}
+            return { 'Content-Type': 'application/json' };
+        }
         return fetch('/api/worldinfo/get', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name })
-        }).then(function (r) { return r.json(); });
+            headers: headers(),
+            body: JSON.stringify({ name: name }),
+            cache: 'no-cache'
+        }).then(function (r) {
+            if (!r.ok) throw new Error('worldinfo/get failed: ' + r.status);
+            return r.json();
+        }).catch(function (err) {
+            try { console.warn('[OM-WB] direct load failed, fallback to ctx.loadWorldInfo:', name, err); } catch (e) {}
+            if (ctx && typeof ctx.loadWorldInfo === 'function') return Promise.resolve(ctx.loadWorldInfo(name));
+            throw err;
+        });
     }
     function extractWorldBookEntries(data) {
         if (!data) return [];
@@ -1021,11 +1035,11 @@
             catch (e) { return [{ content: data, comment: '' }]; }
         }
         if (Array.isArray(data)) return data;
-        if (data.content || data.comment || data.key) return [data];
         if (data.entries) {
             if (Array.isArray(data.entries)) return data.entries;
             if (typeof data.entries === 'object') return Object.keys(data.entries).map(function (k) { return data.entries[k]; });
         }
+        if (data.content || data.comment || data.key) return [data];
         var containers = ['worldInfo', 'world_info', 'data', 'result', 'book'];
         for (var i = 0; i < containers.length; i++) {
             var v = data[containers[i]];
