@@ -8,7 +8,7 @@
 (function () {
 
     var SCRIPT_NAME = '穿搭管理';
-    var OM_VERSION = '21.3.1';
+    var OM_VERSION = '21.3.2';
     var BTN_ID = 'outfit-mgr-ext-btn-v4';
     var DB_NAME = 'outfit_mgr_db';
     var DB_VERSION = 1;
@@ -899,16 +899,16 @@
         if (name && list.indexOf(name) === -1) list.push(name);
     }
     function getDefaultSelectedWorldBookNames(ctx, d) {
-        var activeNames = getActiveWorldBookNames(ctx, d);
-        activeNames = activeNames.filter(isLikelyOutfitWorldBookName);
-        if (activeNames.length > 0) return activeNames;
-        var allNames = getKnownWorldBookNames(ctx);
-        return allNames.filter(isLikelyOutfitWorldBookName);
+        var names = [];
+        getActiveWorldBookNames(ctx, d).filter(isLikelyOutfitWorldBookName).forEach(function (name) { addUniqueName(names, name); });
+        getKnownWorldBookNames(ctx).filter(isLikelyOutfitWorldBookName).forEach(function (name) { addUniqueName(names, name); });
+        return names;
     }
     function getSelectedWorldBookNames(ctx, d) {
-        var selected = d && Array.isArray(d.selectedWorldBookNames) ? d.selectedWorldBookNames.filter(isLikelyOutfitWorldBookName) : [];
-        if (selected.length > 0) return selected;
-        return getDefaultSelectedWorldBookNames(ctx, d);
+        var selected = [];
+        (d && Array.isArray(d.selectedWorldBookNames) ? d.selectedWorldBookNames : []).filter(isLikelyOutfitWorldBookName).forEach(function (name) { addUniqueName(selected, name); });
+        getDefaultSelectedWorldBookNames(ctx, d).forEach(function (name) { addUniqueName(selected, name); });
+        return selected;
     }
     function getVisibleWorldBookNames(ctx, d) {
         var names = [];
@@ -2617,7 +2617,8 @@ function renderQuickScenes(d) {
                     container.innerHTML = '<span style="opacity:.5">没有找到可用穿搭世界书，请先在酒馆中创建、启用或选择世界书。</span>';
                     return;
                 }
-                var selected = savedSelected.length > 0 ? savedSelected.slice() : selectedDefaults.slice();
+                var selected = selectedDefaults.slice();
+                savedSelected.forEach(function(name) { addUniqueName(selected, name); });
                 activeNames.forEach(function(name) { addUniqueName(selected, name); });
                 var h = '';
                 wbNames.forEach(function(name, idx) {
