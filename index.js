@@ -63,10 +63,12 @@
     function saveToSharedSettings(d) {
         var root = getSharedSettingsRoot();
         if (!root) return false;
+        d.updatedAt = Date.now();
         root[SHARED_DATA_KEY] = d;
         try {
             var ctx = getSTContextSafe();
             if (ctx && ctx.saveSettingsDebounced) ctx.saveSettingsDebounced();
+            else if (ctx && ctx.saveSettings) ctx.saveSettings();
         } catch (e) {}
         return true;
     }
@@ -78,6 +80,68 @@
             (d.chars && Object.keys(d.chars).length > 0) ||
             (Array.isArray(d.presets) && d.presets.length > 0)
         ));
+    }
+
+    function cloneData(d) {
+        try { return d ? JSON.parse(JSON.stringify(d)) : null; }
+        catch (e) { return d || null; }
+    }
+
+    function mergeUniqueStrings(target, source) {
+        if (!Array.isArray(source)) return target || [];
+        target = Array.isArray(target) ? target : [];
+        source.forEach(function (v) {
+            if (v && target.indexOf(v) === -1) target.push(v);
+        });
+        return target;
+    }
+
+    function mergeOutfitsById(target, source) {
+        target = Array.isArray(target) ? target : [];
+        if (!Array.isArray(source)) return target;
+        var seen = {};
+        target.forEach(function (o) { if (o && o.id) seen[o.id] = true; });
+        source.forEach(function (o) {
+            if (!o) return;
+            if (!o.id || !seen[o.id]) {
+                target.push(o);
+                if (o.id) seen[o.id] = true;
+            }
+        });
+        return target;
+    }
+
+    function mergeObjectMap(target, source) {
+        target = target && typeof target === 'object' ? target : {};
+        source = source && typeof source === 'object' ? source : {};
+        Object.keys(source).forEach(function (k) {
+            if (target[k] === undefined) target[k] = source[k];
+        });
+        return target;
+    }
+
+    function mergeWardrobeData(primary, secondary) {
+        var merged = ensureDefaults(cloneData(primary) || def());
+        var extra = ensureDefaults(cloneData(secondary) || null);
+        if (!hasWardrobeData(extra)) return merged;
+        merged.outfits = mergeOutfitsById(merged.outfits, extra.outfits);
+        merged.categories = mergeUniqueStrings(merged.categories, extra.categories);
+        merged.presets = mergeOutfitsById(merged.presets, extra.presets);
+        merged.selectedWorldBookNames = mergeUniqueStrings(merged.selectedWorldBookNames, extra.selectedWorldBookNames);
+        merged.charNames = mergeUniqueStrings(merged.charNames, extra.charNames);
+        merged.virtualOutfits = mergeObjectMap(merged.virtualOutfits, extra.virtualOutfits);
+        if ((!merged.activeIds || merged.activeIds.length === 0) && Array.isArray(extra.activeIds)) merged.activeIds = extra.activeIds.slice();
+        if (!merged.chars) merged.chars = {};
+        Object.keys(extra.chars || {}).forEach(function (cn) {
+            if (!merged.chars[cn]) merged.chars[cn] = { outfits: [], categories: [], activeIds: [] };
+            var mc = merged.chars[cn];
+            var ec = extra.chars[cn] || {};
+            mc.outfits = mergeOutfitsById(mc.outfits, ec.outfits);
+            mc.categories = mergeUniqueStrings(mc.categories, ec.categories);
+            if ((!mc.activeIds || mc.activeIds.length === 0) && Array.isArray(ec.activeIds)) mc.activeIds = ec.activeIds.slice();
+            if (merged.charNames.indexOf(cn) === -1) merged.charNames.push(cn);
+        });
+        return ensureDefaults(merged);
     }
 
     // ── IndexedDB ─────────────────────────────────────────────
@@ -95,10 +159,9 @@
     function loadFromDB(cb) {
         if (dataCache) { cb(dataCache); return; }
         var shared = loadFromSharedSettings();
-        if (shared) { dataCache = ensureDefaults(shared); cb(dataCache); return; }
         openDB(function (db) {
             if (!db) {
-                dataCache = ensureDefaults(loadFromLS());
+                dataCache = shared ? mergeWardrobeData(shared, loadFromLS()) : ensureDefaults(loadFromLS());
                 if (hasWardrobeData(dataCache)) saveToSharedSettings(dataCache);
                 cb(dataCache);
                 return;
@@ -111,12 +174,12 @@
                     var backup = loadFromLS();
                     if (hasWardrobeData(backup)) { result = backup; saveToDB(result); }
                 }
-                dataCache = ensureDefaults(result || loadFromLS());
+                dataCache = shared ? mergeWardrobeData(shared, result || loadFromLS()) : ensureDefaults(result || loadFromLS());
                 if (hasWardrobeData(dataCache)) saveToSharedSettings(dataCache);
                 cb(dataCache);
             };
             req.onerror = function () {
-                dataCache = ensureDefaults(loadFromLS());
+                dataCache = shared ? mergeWardrobeData(shared, loadFromLS()) : ensureDefaults(loadFromLS());
                 if (hasWardrobeData(dataCache)) saveToSharedSettings(dataCache);
                 cb(dataCache);
             };
@@ -125,6 +188,7 @@
 
     function saveToDB(d, cb) {
         dataCache = d;
+        d.updatedAt = Date.now();
         saveToSharedSettings(d);
         openDB(function (db) {
             if (!db) { try { localStorage.setItem('outfit_mgr_v4', JSON.stringify(d)); } catch (e) {} if (cb) cb(); return; }
@@ -938,11 +1002,54 @@
             body: JSON.stringify({ name: name })
         }).then(function (r) { return r.json(); });
     }
+    function extractWorldBookEntries(data) {
+        if (!data) return [];
+        if (typeof data === 'string') {
+            try { return extractWorldBookEntries(JSON.parse(data)); }
+            catch (e) { return [{ content: data, comment: '' }]; }
+        }
+        if (Array.isArray(data)) return data;
+        if (data.content || data.comment || data.key) return [data];
+        if (data.entries) {
+            if (Array.isArray(data.entries)) return data.entries;
+            if (typeof data.entries === 'object') return Object.keys(data.entries).map(function (k) { return data.entries[k]; });
+        }
+        var containers = ['worldInfo', 'world_info', 'data', 'result', 'book'];
+        for (var i = 0; i < containers.length; i++) {
+            var v = data[containers[i]];
+            if (!v || v === data) continue;
+            var found = extractWorldBookEntries(v);
+            if (found.length > 0) return found;
+        }
+        var numericKeys = Object.keys(data).filter(function (k) { return /^\d+$/.test(k) && data[k] && typeof data[k] === 'object'; });
+        if (numericKeys.length > 0) return numericKeys.map(function (k) { return data[k]; });
+        return [];
+    }
+    function splitPackedWorldBookEntry(entry) {
+        if (!entry || typeof entry.content !== 'string') return [entry];
+        var content = entry.content;
+        var blocks = [];
+        var re = /<([^\/<>\n]{1,80})>([\s\S]*?)<\/\1>/g;
+        var m;
+        while ((m = re.exec(content))) {
+            var block = m[0];
+            if (!worldBookClothingPattern.test(block) && block.indexOf('睡衣') === -1) continue;
+            blocks.push({
+                comment: m[1].replace(/穿搭刻画|穿搭指导|内衣刻画|睡衣刻画/g, '').trim(),
+                key: entry.key,
+                content: block,
+                disable: entry.disable,
+                enabled: entry.enabled
+            });
+        }
+        return blocks.length > 1 ? blocks : [entry];
+    }
     function parseWorldBookStyles(data, sourceName) {
         var entries = [];
-        if (data && Array.isArray(data.entries)) entries = data.entries;
-        else if (data && data.entries && typeof data.entries === 'object') entries = Object.keys(data.entries).map(function (k) { return data.entries[k]; });
-        return entries.map(function (entry) {
+        extractWorldBookEntries(data).forEach(function (entry) {
+            splitPackedWorldBookEntry(entry).forEach(function (one) { entries.push(one); });
+        });
+        var parsed = entries.map(function (entry) {
             if (!entry || entry.disable === true || entry.enabled === false) return null;
             var comment = entry.comment || '';
             var key = Array.isArray(entry.key) ? entry.key.join(' / ') : (entry.key || '');
@@ -954,6 +1061,8 @@
             if (!worldBookClothingPartPattern.test(full) && haystack.indexOf('睡衣') === -1) return null;
             return parseWorldBookEntry(full, comment, key, sourceName);
         }).filter(Boolean);
+        try { console.log('[OM-WB] parsed', sourceName, 'entries:', entries.length, 'outfits:', parsed.length); } catch (e) {}
+        return parsed;
     }
     function isWorldBookMetaEntry(text) {
         var firstLine = (text || '').split('\n').filter(function (l) { return l.trim(); })[0] || '';

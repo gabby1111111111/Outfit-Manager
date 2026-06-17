@@ -415,6 +415,85 @@ Image analysis uses OpenAI-compatible `chat/completions` with image content.
 
 ## Common Change Requests
 
+## Bug Intake Mode
+
+When Gabriella says `提交bug模式`, `bug模式`, or gives a bug report for this
+project, do not edit code immediately. First read this file and
+`GABRIELLA_GLP.md`, then produce a short bug intake note.
+
+The intake note should include:
+
+```text
+1. Bug summary
+2. Reproduction path as understood
+3. Expected vs actual behavior
+4. Affected control points:
+   def/load/save/UI/worldBook/AI generation/activeIds/tryInjectBody
+5. Likely call chain
+6. Reproduction plan:
+   - What Codex can reproduce locally
+   - What needs SillyTavern/browser/user state
+7. Minimal fix plan
+8. Verification plan
+```
+
+Only after the intake note should the agent make code changes, unless the user
+explicitly says to investigate only.
+
+Preferred reproduction order:
+
+```text
+1. Static trace in index.js
+2. node --check index.js
+3. Local script/smoke test when the bug can be isolated
+4. Browser/SillyTavern reproduction when a running ST session is available
+5. User-provided console logs/screenshots when the issue depends on private
+   role, world-book, browser, or current chat state
+```
+
+For bugs involving the live SillyTavern UI, ask for or inspect:
+
+```text
+clicked button or workflow
+selected User/character view
+selected world books
+current active outfit state
+browser console errors, especially [OM-AI]
+whether a page refresh or ST restart changes the behavior
+```
+
+During bug mode, keep the scope narrow:
+
+```text
+Do not rewrite storage.
+Do not change saved data shape unless explicitly required.
+Do not change prompt injection behavior unless the bug is about injection.
+Do not add temporary test files to git.
+Run node --check index.js after code edits.
+```
+
+### Bug report format Gabriella can use
+
+```text
+提交bug模式
+
+现象：
+点击【】后，出现【】。
+
+复现：
+1.
+2.
+3.
+
+预期：
+
+实际：
+
+console / [OM-AI]：
+
+约束：
+```
+
 ### Add a bottom-bar button
 
 Edit the HTML inside `openPopup()` where `.om-bottombar` is built.
