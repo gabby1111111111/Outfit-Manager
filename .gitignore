@@ -2,3 +2,9 @@
 Thumbs.db
 *.bak
 node_modules/
+AGENTS.md
+GABRIELLA_GLP.md
+_live_result.txt
+_test_api.cjs
+_test_live.cjs
+_test_result.txt
