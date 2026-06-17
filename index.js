@@ -1166,6 +1166,7 @@
         renderBottomStatus();
         updateBtn();
         toast('衣柜随机：' + pick.name);
+        if (pick.imageData) openLightbox([pick], pick.id);
     }
 
 
