@@ -213,13 +213,9 @@ worldBookStyleMatchesScene(ws, scene)
 parseWorldBookStyles(data, sourceName)
 ```
 
-To support more world books:
+Current compatibility behavior:
 
-1. Respect all user-selected world books.
-
-Current behavior filters selected names down to names containing `uu`.
-
-Better behavior:
+1. User-selected world books are respected as-is.
 
 ```js
 function getSelectedWorldBookNames(ctx, d) {
@@ -231,9 +227,7 @@ function getSelectedWorldBookNames(ctx, d) {
 }
 ```
 
-2. Improve default discovery.
-
-Instead of defaulting only to `uu`, prefer active ST world books, then names that look wardrobe-related:
+2. Default discovery prefers active ST world books, then names that look wardrobe-related:
 
 ```js
 function getDefaultSelectedWorldBookNames(ctx, d) {
@@ -247,7 +241,7 @@ function getDefaultSelectedWorldBookNames(ctx, d) {
 }
 ```
 
-3. Add style-to-scene mappings.
+3. To support a new style reliably, add style-to-scene mappings.
 
 Update `getWorldBookStyleSceneKeys(ws)`:
 

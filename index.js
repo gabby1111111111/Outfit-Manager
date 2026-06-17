@@ -267,6 +267,14 @@
         return d.outfits;
     }
 
+    function isItemType(o) {
+        return !!(o && (o.type === 'item' || o.type === '单品'));
+    }
+
+    function isOutfitType(o) {
+        return !!(o && (!o.type || o.type === 'outfit' || o.type === '套装'));
+    }
+
     // 获取当前视角的分类列表
     function getViewCategories(d) {
         if (d.currentView === 'char' && d.currentChar) return getCharData(d, d.currentChar).categories;
@@ -808,17 +816,14 @@
         catch (e) { return []; }
     }
     function getDefaultSelectedWorldBookNames(ctx, d) {
-        var allNames = getKnownWorldBookNames(ctx);
-        var uuNames = allNames.filter(function (name) { return /uu/i.test(name); });
-        if (uuNames.length > 0) return uuNames;
         var activeNames = getActiveWorldBookNames(ctx, d);
-        var activeUU = activeNames.filter(function (name) { return /uu/i.test(name); });
-        return activeUU.length > 0 ? activeUU : activeNames;
+        if (activeNames.length > 0) return activeNames;
+        var allNames = getKnownWorldBookNames(ctx);
+        return allNames.filter(function (name) { return /uu|穿搭|服装|衣柜|outfit|wardrobe/i.test(name); });
     }
     function getSelectedWorldBookNames(ctx, d) {
         var selected = d && Array.isArray(d.selectedWorldBookNames) ? d.selectedWorldBookNames.filter(Boolean) : [];
-        var selectedUU = selected.filter(function (name) { return /uu/i.test(name); });
-        if (selectedUU.length > 0) return selectedUU;
+        if (selected.length > 0) return selected;
         return getDefaultSelectedWorldBookNames(ctx, d);
     }
     function createWorldBookOutfit(ws, idPrefix, idx) {
@@ -833,8 +838,7 @@
             '休闲风': ['外出'],
             '千禧y2k风': ['外出', '约会'],
             '运动风(街头潮牌版)': ['运动'],
-            '运动风(街头潮牌版': ['运动'],
-            '运动风(街头潮牌版': ['运动'],
+            '日系软甜风': ['外出', '约会'],
             '日系复古风': ['外出', '约会'],
             '日系保暖': ['外出', '约会'],
             '办公室海妖风': ['外出', '约会'],
@@ -1153,7 +1157,7 @@
     function applyRandomWardrobeOutfit() {
         var d = load();
         var outfits = getViewOutfits(d).filter(function (o) {
-            return o && (!o.type || o.type === 'outfit' || o.type === '套装');
+            return isOutfitType(o);
         });
         if (outfits.length === 0) {
             toast('当前衣柜还没有可随机的套装', true);
@@ -1398,7 +1402,7 @@
         var catbar = document.getElementById('om-catbar'); if (!catbar) return;
         var d = load(); var cats = getViewCategories(d); var allOutfits = getViewOutfits(d);
         var outfitCats = {}; var itemCats = {};
-        allOutfits.forEach(function (o) { var c = o.category || ''; if (!o.type || o.type === 'outfit') { if (c) outfitCats[c] = true; } else { if (c) itemCats[c] = true; } });
+        allOutfits.forEach(function (o) { var c = o.category || ''; if (isOutfitType(o)) { if (c) outfitCats[c] = true; } else { if (c) itemCats[c] = true; } });
         if (cats.length === 0) { catbar.style.display = 'none'; return; }
         catbar.style.display = '';
         var html = '<button class="om-catbtn om-typebtn"' + (curType === '__all__' ? ' on' : '') + ' data-t="__all__">全部</button>';
@@ -1440,7 +1444,7 @@
 
         // 按分类过滤
         var list = curCat === '__all__' ? allOutfits : allOutfits.filter(function (o) { return o.category === curCat; });
-        if (curType !== '__all__') list = list.filter(function (o) { return curType === 'outfit' ? (!o.type || o.type === 'outfit') : o.type === 'item'; });
+        if (curType !== '__all__') list = list.filter(function (o) { return curType === 'outfit' ? isOutfitType(o) : isItemType(o); });
         if (searchQuery) {
             var q = searchQuery.toLowerCase();
             list = list.filter(function (o) {
@@ -1879,7 +1883,7 @@ function renderQuickScenes(d) {
         }
         function lingerieMatches(scene) {
             if (scene === '家居' || scene === '睡前') return [];
-            return getWorldBookStyles(selectedWBNames).filter(function(ws) { return isLingerieStyle(ws); });
+            return getWorldBookStyles(selectedWBNames).filter(function(ws) { return isLingerieStyle(ws) && worldBookStyleMatchesScene(ws, scene); });
         }
         var sceneDefs = [
             { key: '外出', label: '外出' },
@@ -2369,7 +2373,7 @@ function renderQuickScenes(d) {
                 var selectedDefaults = getSelectedWorldBookNames(ctx, dd);
                 var wbNames = selectedDefaults.slice();
                 if (wbNames.length === 0) {
-                    container.innerHTML = '<span style="opacity:.5">没有找到默认 uu 世界书，请先在酒馆中创建或选择世界书。</span>';
+                    container.innerHTML = '<span style="opacity:.5">没有找到可用穿搭世界书，请先在酒馆中创建、启用或选择世界书。</span>';
                     return;
                 }
                 var selected = selectedDefaults.slice();
@@ -2415,7 +2419,7 @@ function renderQuickScenes(d) {
                 }
             } catch(e) { container.innerHTML = '<span style="opacity:.5">加载世界书失败</span>'; }
         })();
-        function doRoll() { var ss = sheet.querySelector('#om-roll-style').value; var sn = sheet.querySelector('#om-roll-season').value; var sc = sheet.querySelector('#om-roll-scene').value; var sm = sheet.querySelector('#om-roll-mode').value; var useWBOnly = sheet.querySelector('#om-roll-wb-only') ? sheet.querySelector('#om-roll-wb-only').checked : false; var pool = useWBOnly ? [] : allOutfits.slice(); var wbList = sheet.querySelector('#om-roll-wb-list'); if (wbList) { var wbChecks = wbList.querySelectorAll('input[type=checkbox].om-roll-wb-book:checked'); wbChecks.forEach(function(cb) { var wbName = cb.value; if (worldBookStyleCache[wbName]) { worldBookStyleCache[wbName].forEach(function(ws, wi) { pool.push(createWorldBookOutfit(ws, 'wb_dyn_' + wbName.replace(/[^a-zA-Z0-9]/g,'_'), wi)); }); }});} var f = pool.filter(function (o) { if (ss && (!o.style || o.style.trim() !== ss)) return false; if (sn && (!o.season || o.season.trim() !== sn)) return false; if (sc && (!o.sceneTag || o.sceneTag.trim() !== sc)) return false; return true; }); if (f.length === 0) { toast('没有匹配的穿搭', true); return; } var r = { outfits: [], items: [] }; var fo = f.filter(function (o) { return !o.type || o.type === 'outfit'; }); var fi = f.filter(function (o) { return o.type === 'item'; }); if (sm === 'outfit') { if (fo.length === 0) { toast('没有匹配的套装', true); return; } r.outfits = [fo[Math.floor(Math.random() * fo.length)]]; } else if (sm === 'items') { var g = {}; fi.forEach(function (it) { var c = it.category || '其他'; if (!g[c]) g[c] = []; g[c].push(it); }); for (var k in g) r.items.push(g[k][Math.floor(Math.random() * g[k].length)]); } else { if (fo.length > 0) r.outfits = [fo[Math.floor(Math.random() * fo.length)]]; var g2 = {}; fi.forEach(function (it) { var c2 = it.category || '其他'; if (!g2[c2]) g2[c2] = []; g2[c2].push(it); }); for (var k2 in g2) r.items.push(g2[k2][Math.floor(Math.random() * g2[k2].length)]); } lastResult = r; var h = '<div>'; if (r.outfits.length > 0) { h += '<div style="font-weight:600;margin-bottom:8px">套装</div>'; r.outfits.forEach(function (o) { h += '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:12px;padding:8px;background:rgba(127,127,127,.06);border-radius:8px">'; if (o.imageData) h += '<img src="' + o.imageData + '" style="width:80px;height:106px;object-fit:cover;border-radius:6px;flex-shrink:0" />'; h += '<div style="min-width:0"><div style="font-weight:600;margin-bottom:2px">' + esc(o.name) + '</div>'; if (o.style) h += '<div style="font-size:.8em;opacity:.7">风格：' + esc(o.style) + '</div>'; if (o.season) h += '<div style="font-size:.8em;opacity:.7">季节：' + esc(o.season) + '</div>'; if (o.sceneTag) h += '<div style="font-size:.8em;opacity:.7">场景：' + esc(o.sceneTag) + '</div>'; if (o.description) h += '<div style="font-size:.82em;opacity:.85;margin-top:6px;line-height:1.6;padding:8px;background:rgba(127,127,127,.05);border-radius:6px;white-space:pre-wrap">' + esc(o.description) + '</div>'; h += '</div></div>'; }); } if (r.items.length > 0) { h += '<div style="font-weight:600;margin:8px 0">单品</div>'; r.items.forEach(function (o) { h += '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:8px;padding:6px 8px;background:rgba(127,127,127,.04);border-radius:6px">'; if (o.imageData) h += '<img src="' + o.imageData + '" style="width:60px;height:80px;object-fit:cover;border-radius:4px;flex-shrink:0" />'; h += '<div><span style="font-size:.75em;opacity:.5">' + esc(o.category || '其他') + '</span><br>' + esc(o.name) + '</div>'; if (o.description) h += '<div style="font-size:.75em;opacity:.7;margin-top:2px;line-height:1.4">' + esc(o.description) + '</div>'; h += '</div></div>'; }); } h += '</div>'; sheet.querySelector('#om-roll-result').innerHTML = h; sheet.querySelector('#om-roll-result-area').style.display = ''; }
+        function doRoll() { var ss = sheet.querySelector('#om-roll-style').value; var sn = sheet.querySelector('#om-roll-season').value; var sc = sheet.querySelector('#om-roll-scene').value; var sm = sheet.querySelector('#om-roll-mode').value; var useWBOnly = sheet.querySelector('#om-roll-wb-only') ? sheet.querySelector('#om-roll-wb-only').checked : false; var pool = useWBOnly ? [] : allOutfits.slice(); var wbList = sheet.querySelector('#om-roll-wb-list'); if (wbList) { var wbChecks = wbList.querySelectorAll('input[type=checkbox].om-roll-wb-book:checked'); wbChecks.forEach(function(cb) { var wbName = cb.value; if (worldBookStyleCache[wbName]) { worldBookStyleCache[wbName].forEach(function(ws, wi) { pool.push(createWorldBookOutfit(ws, 'wb_dyn_' + wbName.replace(/[^a-zA-Z0-9]/g,'_'), wi)); }); }});} var f = pool.filter(function (o) { if (ss && (!o.style || o.style.trim() !== ss)) return false; if (sn && (!o.season || o.season.trim() !== sn)) return false; if (sc && (!o.sceneTag || o.sceneTag.trim() !== sc)) return false; return true; }); if (f.length === 0) { toast('没有匹配的穿搭', true); return; } var r = { outfits: [], items: [] }; var fo = f.filter(function (o) { return isOutfitType(o); }); var fi = f.filter(function (o) { return isItemType(o); }); if (sm === 'outfit') { if (fo.length === 0) { toast('没有匹配的套装', true); return; } r.outfits = [fo[Math.floor(Math.random() * fo.length)]]; } else if (sm === 'items') { var g = {}; fi.forEach(function (it) { var c = it.category || '其他'; if (!g[c]) g[c] = []; g[c].push(it); }); for (var k in g) r.items.push(g[k][Math.floor(Math.random() * g[k].length)]); } else { if (fo.length > 0) r.outfits = [fo[Math.floor(Math.random() * fo.length)]]; var g2 = {}; fi.forEach(function (it) { var c2 = it.category || '其他'; if (!g2[c2]) g2[c2] = []; g2[c2].push(it); }); for (var k2 in g2) r.items.push(g2[k2][Math.floor(Math.random() * g2[k2].length)]); } lastResult = r; var h = '<div>'; if (r.outfits.length > 0) { h += '<div style="font-weight:600;margin-bottom:8px">套装</div>'; r.outfits.forEach(function (o) { h += '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:12px;padding:8px;background:rgba(127,127,127,.06);border-radius:8px">'; if (o.imageData) h += '<img src="' + o.imageData + '" style="width:80px;height:106px;object-fit:cover;border-radius:6px;flex-shrink:0" />'; h += '<div style="min-width:0"><div style="font-weight:600;margin-bottom:2px">' + esc(o.name) + '</div>'; if (o.style) h += '<div style="font-size:.8em;opacity:.7">风格：' + esc(o.style) + '</div>'; if (o.season) h += '<div style="font-size:.8em;opacity:.7">季节：' + esc(o.season) + '</div>'; if (o.sceneTag) h += '<div style="font-size:.8em;opacity:.7">场景：' + esc(o.sceneTag) + '</div>'; if (o.description) h += '<div style="font-size:.82em;opacity:.85;margin-top:6px;line-height:1.6;padding:8px;background:rgba(127,127,127,.05);border-radius:6px;white-space:pre-wrap">' + esc(o.description) + '</div>'; h += '</div></div>'; }); } if (r.items.length > 0) { h += '<div style="font-weight:600;margin:8px 0">单品</div>'; r.items.forEach(function (o) { h += '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:8px;padding:6px 8px;background:rgba(127,127,127,.04);border-radius:6px">'; if (o.imageData) h += '<img src="' + o.imageData + '" style="width:60px;height:80px;object-fit:cover;border-radius:4px;flex-shrink:0" />'; h += '<div><span style="font-size:.75em;opacity:.5">' + esc(o.category || '其他') + '</span><br>' + esc(o.name) + '</div>'; if (o.description) h += '<div style="font-size:.75em;opacity:.7;margin-top:2px;line-height:1.4">' + esc(o.description) + '</div>'; h += '</div></div>'; }); } h += '</div>'; sheet.querySelector('#om-roll-result').innerHTML = h; sheet.querySelector('#om-roll-result-area').style.display = ''; }
         sheet.querySelector('#om-roll-go').addEventListener('click', doRoll);
         sheet.querySelector('#om-roll-cancel').addEventListener('click', function () { closeSheet(sheet); });
         sheet.querySelector('#om-roll-apply').addEventListener('click', function () { if (!lastResult) return; var dd = load(); dd.activeIds = []; if (dd.chars) for (var cn in dd.chars) dd.chars[cn].activeIds = []; var ids = []; lastResult.outfits.forEach(function (o) { if (o.isVirtual) { var no = { id: genId(), name: o.name, category: o.category || '', type: 'outfit', style: o.style || '', season: o.season || '', sceneTag: o.sceneTag || '', description: o.description || '', imageData: null, createdAt: Date.now(), isVirtual: true }; dd.virtualOutfits[no.id] = no; ids.push(no.id); } else { ids.push(o.id); } }); lastResult.items.forEach(function (o) { ids.push(o.id); }); if (dd.currentView === 'char' && dd.currentChar) getCharData(dd, dd.currentChar).activeIds = ids; else dd.activeIds = ids; save(dd); closeSheet(sheet); toast('已应用！(' + ids.length + '件)'); renderGrid(); renderBottomStatus(); updateBtn(); });
@@ -2433,7 +2437,7 @@ function renderQuickScenes(d) {
             '<div class="om-sheet-title"><i class="fa-solid fa-' + (outfit ? 'pen' : 'plus') + '"></i>' + (outfit ? '编辑穿搭' : '添加穿搭') + '</div>',
             '<div class="om-field"><label>穿搭名称 *</label><input type="text" id="om-dn" placeholder="如：白色蕾丝连衣裙" value="' + esc(outfit ? outfit.name : '') + '" /></div>',
             '<div class="om-field"><label>分类</label><div class="om-frow"><select id="om-dcat">' + catOpts + '</select><button class="om-btn om-btn-outline" id="om-dnewcat" style="white-space:nowrap;font-size:.8em;padding:7px 10px">+ 新建</button></div></div>',
-            '<div class="om-field"><label>类型</label><div class="om-type-radios"><label class="om-radio-label"><input type="radio" name="om-dtype" value="套装"' + (!outfit || outfit.type !== '单品' ? ' checked' : '') + ' /> 套装</label><label class="om-radio-label" style="margin-left:16px"><input type="radio" name="om-dtype" value="单品"' + (outfit && outfit.type === '单品' ? ' checked' : '') + ' /> 单品</label></div></div>',
+            '<div class="om-field"><label>类型</label><div class="om-type-radios"><label class="om-radio-label"><input type="radio" name="om-dtype" value="套装"' + (!outfit || isOutfitType(outfit) ? ' checked' : '') + ' /> 套装</label><label class="om-radio-label" style="margin-left:16px"><input type="radio" name="om-dtype" value="单品"' + (outfit && isItemType(outfit) ? ' checked' : '') + ' /> 单品</label></div></div>',
             '<div class="om-field"><label>风格</label><input type="text" id="om-dstyle" placeholder="学院 / 简约 / 运动 / 甜美 / 通勤 / 休闲 / 街头 / 优雅 / 舒适" value="' + esc(outfit ? outfit.style || '' : '') + '" /></div>',
             '<div class="om-field"><label>季节</label><input type="text" id="om-dseason" placeholder="春 / 夏 / 秋 / 冬 / 全年" value="' + esc(outfit ? outfit.season || '' : '') + '" /></div>',
             '<div class="om-field"><label>文字描述 <span class="om-hint">AI 注入用，越详细越好</span></label><textarea id="om-ddesc" rows="4" placeholder="如：白色蕾丝镂空连衣裙，领口略低，裙摆及膝……">' + esc(outfit ? outfit.description || '' : '') + '</textarea>' +
