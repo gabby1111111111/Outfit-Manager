@@ -8,7 +8,7 @@
 (function () {
 
     var SCRIPT_NAME = '穿搭管理';
-    var OM_VERSION = '21.3.5';
+    var OM_VERSION = '21.3.6';
     var BTN_ID = 'outfit-mgr-ext-btn-v4';
     var DB_NAME = 'outfit_mgr_db';
     var DB_VERSION = 1;
@@ -2715,39 +2715,62 @@ function renderQuickScenes(d) {
                 container.innerHTML = h;
                 var goBtn = sheet.querySelector('#om-roll-go');
                 if (goBtn) { goBtn.disabled = true; goBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 加载世界书...'; }
-                // Save selection on change
-                container.querySelectorAll('.om-roll-wb-book').forEach(function(cb) {
-                    cb.addEventListener('change', function() {
-                        var dd2 = load();
-                        dd2.selectedWorldBookNames = [];
-                        container.querySelectorAll('.om-roll-wb-book:checked').forEach(function(c) { dd2.selectedWorldBookNames.push(c.value); });
-                        dd2.worldBookSelectionInitialized = true;
-                        save(dd2);
-                        refreshRollFilterOptions(dd2.selectedWorldBookNames);
-                    });
-                });
-                refreshWorldBookStyles(wbNames, function() {
-                    rollWorldBooksReady = true;
+                function getCheckedBookNames() {
+                    var names = [];
+                    container.querySelectorAll('.om-roll-wb-book:checked').forEach(function(c) { names.push(c.value); });
+                    return names;
+                }
+                function updateWorldBookCountLabels() {
                     container.querySelectorAll('.om-roll-wb-book').forEach(function(cb) {
+                        var labelText = cb.parentElement.lastChild;
+                        var baseText = (labelText && labelText.nodeType === 3 ? labelText.nodeValue : '').replace(/\s*\(\d+套\)\s*$/, '');
                         if (worldBookStyleCache[cb.value]) {
                             var count = worldBookStyleCache[cb.value].length;
-                            var labelText = cb.parentElement.lastChild;
                             if (labelText && labelText.nodeType === 3) {
-                                labelText.nodeValue = labelText.nodeValue.replace(/\s*\(\d+套\)\s*$/, '') + ' (' + count + '套)';
+                                labelText.nodeValue = baseText + ' (' + count + '套)';
                             } else {
                                 cb.parentElement.appendChild(document.createTextNode(' (' + count + '套)'));
                             }
                         }
                     });
-                    refreshRollFilterOptions(wbNames);
-                    try {
-                        console.log('[OM-WB] roll world books ready:', wbNames.map(function (name) {
-                            return name + '=' + ((worldBookStyleCache[name] || []).length);
-                        }).join(', '));
-                    } catch (e) {}
-                    var goBtn2 = sheet.querySelector('#om-roll-go');
-                    if (goBtn2) { goBtn2.disabled = false; goBtn2.innerHTML = '随机搭配！'; }
+                }
+                function loadCheckedWorldBooks() {
+                    var checkedNames = getCheckedBookNames();
+                    rollWorldBooksReady = false;
+                    var btn = sheet.querySelector('#om-roll-go');
+                    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 加载世界书...'; }
+                    if (checkedNames.length === 0) {
+                        rollWorldBooksReady = true;
+                        refreshRollFilterOptions([]);
+                        updateWorldBookCountLabels();
+                        if (btn) { btn.disabled = false; btn.innerHTML = '随机搭配！'; }
+                        try { console.log('[OM-WB] roll world books ready: none selected'); } catch (e) {}
+                        return;
+                    }
+                    refreshWorldBookStyles(checkedNames, function() {
+                        rollWorldBooksReady = true;
+                        updateWorldBookCountLabels();
+                        refreshRollFilterOptions(checkedNames);
+                        try {
+                            console.log('[OM-WB] roll selected world books ready:', checkedNames.map(function (name) {
+                                return name + '=' + ((worldBookStyleCache[name] || []).length);
+                            }).join(', '));
+                        } catch (e) {}
+                        var goBtn2 = sheet.querySelector('#om-roll-go');
+                        if (goBtn2) { goBtn2.disabled = false; goBtn2.innerHTML = '随机搭配！'; }
+                    });
+                }
+                // Save selection on change
+                container.querySelectorAll('.om-roll-wb-book').forEach(function(cb) {
+                    cb.addEventListener('change', function() {
+                        var dd2 = load();
+                        dd2.selectedWorldBookNames = getCheckedBookNames();
+                        dd2.worldBookSelectionInitialized = true;
+                        save(dd2);
+                        loadCheckedWorldBooks();
+                    });
                 });
+                loadCheckedWorldBooks();
             } catch(e) {
                 container.innerHTML = '<span style="opacity:.5">加载世界书失败</span>';
                 var goBtn3 = sheet.querySelector('#om-roll-go');
