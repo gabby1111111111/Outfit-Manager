@@ -8,6 +8,7 @@
 (function () {
 
     var SCRIPT_NAME = '穿搭管理';
+    var OM_VERSION = '21.3.1';
     var BTN_ID = 'outfit-mgr-ext-btn-v4';
     var DB_NAME = 'outfit_mgr_db';
     var DB_VERSION = 1;
@@ -1973,7 +1974,8 @@
         var d = load();
         var selectedWBNames = [];
         try { selectedWBNames = getSelectedWorldBookNames(ctx, d); } catch (e) {}
-        console.log("[OM-AI] selectedWBNames:", selectedWBNames.length);
+        console.log("[OM-AI] selectedWBNames:", selectedWBNames.length, selectedWBNames);
+        console.log("[OM-AI] cache counts:", selectedWBNames.map(function (name) { return name + "=" + ((worldBookStyleCache[name] || []).length); }).join(", "));
         var modernRefs = [];
         var lingerieRefs = [];
         if (selectedWBNames.length > 0) {
@@ -2065,7 +2067,18 @@ function renderQuickScenes(d) {
         var missingWB = selectedWBNames.some(function (name) { return !worldBookStyleCache[name]; });
         if (missingWB && renderQuickScenes._loadingKey !== selectedWBNames.join('|')) {
             renderQuickScenes._loadingKey = selectedWBNames.join('|');
-            refreshWorldBookStyles(selectedWBNames, function () { renderQuickScenes(load()); });
+            refreshWorldBookStyles(selectedWBNames, function () {
+                try {
+                    console.log('[OM-WB] quick scenes world books ready:', selectedWBNames.map(function (name) {
+                        return name + '=' + ((worldBookStyleCache[name] || []).length);
+                    }).join(', '));
+                } catch (e) {}
+                renderQuickScenes(load());
+            });
+            return;
+        }
+        if (missingWB) {
+            return;
         }
         function isLingerieStyle(ws) {
         return /\u5185\u8863/.test(String((ws && ws.source) || '')) || /\u5185\u8863|\u6587\u80f8|\u5185\u88e4|\u62b9\u80f8|\u857e\u4e1d\u6027\u611f|\u6cd5\u5f0f\u4e09\u89d2\u676f|\u805a\u62e2|\u4e1d\u7ef8\u5962\u534e|\u57fa\u7840\u7eaf\u68c9|\u5c11\u5973\u53ef\u7231/.test(String((ws && ws.name) || ''));
@@ -4145,7 +4158,7 @@ function renderQuickScenes(d) {
     setInterval(function () { if (!document.getElementById(FAB_ID)) injectFab(); }, 3000);
 
     loadFromDB(function (d) {
-        // OM v21 loaded
+        try { console.log('[OM] v' + OM_VERSION + ' 已加载 - 世界书随机池修复已启用'); } catch (e) {}
         var finishStartup = function () {
             dataCache = d;
             if (d.useMainApi !== false) autoDetectApiConfig(d);
