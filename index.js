@@ -221,6 +221,7 @@
         if (!d.chars) d.chars = {};
         if (!d.virtualOutfits) d.virtualOutfits = {};
         if (!d.selectedWorldBookNames || !Array.isArray(d.selectedWorldBookNames)) d.selectedWorldBookNames = [];
+        d.selectedWorldBookNames = d.selectedWorldBookNames.filter(isLikelyOutfitWorldBookName);
         if (!d.charNames) d.charNames = [];
         if (!d.apiVision) d.apiVision = def().apiVision;
         else { var dv = def().apiVision; for (var vk in dv) { if (d.apiVision[vk] === undefined) d.apiVision[vk] = dv[vk]; } if (d.apiVision.batchSize && !d.apiVision.concurrency) { d.apiVision.concurrency = Math.min(d.apiVision.batchSize, 5); } delete d.apiVision.batchSize;
@@ -315,8 +316,15 @@
     function getCharData(d, charName) {
         if (!d.chars) d.chars = {};
         if (!d.virtualOutfits) d.virtualOutfits = {};
+        ensureCharName(d, charName);
         if (!d.chars[charName]) d.chars[charName] = { outfits: [], categories: [], activeIds: [] };
         return d.chars[charName];
+    }
+
+    function ensureCharName(d, charName) {
+        if (!charName) return;
+        if (!d.charNames) d.charNames = [];
+        if (d.charNames.indexOf(charName) === -1) d.charNames.push(charName);
     }
 
     // 当前视角是user还是某个角色
@@ -2537,8 +2545,8 @@ function renderQuickScenes(d) {
             try {
                 var ctx = typeof SillyTavern !== 'undefined' && SillyTavern.getContext ? SillyTavern.getContext() : null;
                 var dd = load();
-                var savedSelected = Array.isArray(dd.selectedWorldBookNames) ? dd.selectedWorldBookNames.filter(Boolean) : [];
-                var activeNames = getActiveWorldBookNames(ctx, dd);
+                var savedSelected = Array.isArray(dd.selectedWorldBookNames) ? dd.selectedWorldBookNames.filter(isLikelyOutfitWorldBookName) : [];
+                var activeNames = getActiveWorldBookNames(ctx, dd).filter(isLikelyOutfitWorldBookName);
                 var selectedDefaults = getSelectedWorldBookNames(ctx, dd);
                 var wbNames = getVisibleWorldBookNames(ctx, dd);
                 if (wbNames.length === 0) {
@@ -2564,29 +2572,19 @@ function renderQuickScenes(d) {
                         save(dd2);
                     });
                 });
-                // Load world books if cache is empty
-                var needLoad = false;
-                wbNames.forEach(function(n) { if (!worldBookStyleCache[n]) needLoad = true; });
-                if (needLoad) {
-                    refreshWorldBookStyles(wbNames, function() {
-                        container.querySelectorAll('.om-roll-wb-book').forEach(function(cb) {
-                            if (worldBookStyleCache[cb.value]) {
-                                var count = worldBookStyleCache[cb.value].length;
-                                var txt = cb.parentElement.textContent;
-                                if (!/\(\d/.test(txt)) {
-                                    cb.parentElement.appendChild(document.createTextNode(' (' + count + '套'));
-                                }
-                            }
-                        });
-                    });
-                } else {
+                refreshWorldBookStyles(wbNames, function() {
                     container.querySelectorAll('.om-roll-wb-book').forEach(function(cb) {
                         if (worldBookStyleCache[cb.value]) {
                             var count = worldBookStyleCache[cb.value].length;
-                            cb.parentElement.appendChild(document.createTextNode(' (' + count + '套)'));
+                            var labelText = cb.parentElement.lastChild;
+                            if (labelText && labelText.nodeType === 3) {
+                                labelText.nodeValue = labelText.nodeValue.replace(/\s*\(\d+套\)\s*$/, '') + ' (' + count + '套)';
+                            } else {
+                                cb.parentElement.appendChild(document.createTextNode(' (' + count + '套)'));
+                            }
                         }
                     });
-                }
+                });
             } catch(e) { container.innerHTML = '<span style="opacity:.5">加载世界书失败</span>'; }
         })();
         function openRollResultModal(resultHtml) {
