@@ -253,6 +253,28 @@ Update `getWorldBookStyleSceneKeys(ws)`:
 
 If an entry format is already clean, `parseWorldBookStyles()` usually does not need changes.
 
+### SFW-style world books
+
+`SFW.json`-style entries are supported by the parser when they contain labels such as:
+
+```text
+definition-style labels:
+定义 / 单品 / 配色 / 妆容搭配 / 可选配饰 / 可选鞋履 / 搭配技巧 / 搭配示例
+```
+
+This format usually stores a full style guide in `content` and uses plus-separated example outfits under `搭配示例`.
+The parser should keep the full `raw` entry for AI scene generation, while `materializeWorldBookStyle()` can fall back to one `搭配示例` line for non-AI random rolls.
+
+When adding another non-uu world book format, first check:
+
+```text
+worldBookClothingPattern
+worldBookClothingPartPattern
+parseWorldBookEntry()
+generateWorldBookConcreteOutfit()
+worldBookStyleMatchesScene()
+```
+
 ## Scene AI Generation
 
 Scene buttons call:
