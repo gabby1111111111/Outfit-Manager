@@ -21,6 +21,7 @@
 
     var dbInstance = null;
     var dataCache = null;
+    var persistentLoadComplete = false;
     var darkMode = false; // 默认浅色
     // 获取弹层容器（overlay内部的absolute层，不受overflow:hidden影响因为overlay本身没有overflow）
     function getPopupLayer() {
@@ -157,13 +158,19 @@
     }
 
     function loadFromDB(cb) {
-        if (dataCache) { cb(dataCache); return; }
+        var runtimeCache = dataCache;
+        if (dataCache && persistentLoadComplete) { cb(dataCache); return; }
         var shared = loadFromSharedSettings();
+        function finishLoaded(base) {
+            dataCache = ensureDefaults(base);
+            if (runtimeCache && hasWardrobeData(runtimeCache)) dataCache = mergeWardrobeData(dataCache, runtimeCache);
+            persistentLoadComplete = true;
+            if (hasWardrobeData(dataCache)) saveToSharedSettings(dataCache);
+            cb(dataCache);
+        }
         openDB(function (db) {
             if (!db) {
-                dataCache = shared ? mergeWardrobeData(shared, loadFromLS()) : ensureDefaults(loadFromLS());
-                if (hasWardrobeData(dataCache)) saveToSharedSettings(dataCache);
-                cb(dataCache);
+                finishLoaded(shared ? mergeWardrobeData(shared, loadFromLS()) : ensureDefaults(loadFromLS()));
                 return;
             }
             var tx = db.transaction(STORE_NAME, 'readonly');
@@ -174,20 +181,17 @@
                     var backup = loadFromLS();
                     if (hasWardrobeData(backup)) { result = backup; saveToDB(result); }
                 }
-                dataCache = shared ? mergeWardrobeData(shared, result || loadFromLS()) : ensureDefaults(result || loadFromLS());
-                if (hasWardrobeData(dataCache)) saveToSharedSettings(dataCache);
-                cb(dataCache);
+                finishLoaded(shared ? mergeWardrobeData(shared, result || loadFromLS()) : ensureDefaults(result || loadFromLS()));
             };
             req.onerror = function () {
-                dataCache = shared ? mergeWardrobeData(shared, loadFromLS()) : ensureDefaults(loadFromLS());
-                if (hasWardrobeData(dataCache)) saveToSharedSettings(dataCache);
-                cb(dataCache);
+                finishLoaded(shared ? mergeWardrobeData(shared, loadFromLS()) : ensureDefaults(loadFromLS()));
             };
         });
     }
 
     function saveToDB(d, cb) {
         dataCache = d;
+        persistentLoadComplete = true;
         d.updatedAt = Date.now();
         saveToSharedSettings(d);
         openDB(function (db) {
