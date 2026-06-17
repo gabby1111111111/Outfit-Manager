@@ -8,7 +8,7 @@
 (function () {
 
     var SCRIPT_NAME = '穿搭管理';
-    var OM_VERSION = '21.3.4';
+    var OM_VERSION = '21.3.5';
     var BTN_ID = 'outfit-mgr-ext-btn-v4';
     var DB_NAME = 'outfit_mgr_db';
     var DB_VERSION = 1;
@@ -2146,12 +2146,12 @@ function renderQuickScenes(d) {
         function isLingerieStyle(ws) {
         return /\u5185\u8863/.test(String((ws && ws.source) || '')) || /\u5185\u8863|\u6587\u80f8|\u5185\u88e4|\u62b9\u80f8|\u857e\u4e1d\u6027\u611f|\u6cd5\u5f0f\u4e09\u89d2\u676f|\u805a\u62e2|\u4e1d\u7ef8\u5962\u534e|\u57fa\u7840\u7eaf\u68c9|\u5c11\u5973\u53ef\u7231/.test(String((ws && ws.name) || ''));
     }
-        function modernMatches(scene) {
-            return getWorldBookStyles(selectedWBNames).filter(function(ws) { return !isLingerieStyle(ws) && worldBookStyleMatchesScene(ws, scene); });
+        function modernMatches(scene, namesForRoll) {
+            return getWorldBookStyles(namesForRoll || selectedWBNames).filter(function(ws) { return !isLingerieStyle(ws) && worldBookStyleMatchesScene(ws, scene); });
         }
-        function lingerieMatches(scene) {
+        function lingerieMatches(scene, namesForRoll) {
             if (scene === '家居' || scene === '睡前') return [];
-            return getWorldBookStyles(selectedWBNames).filter(function(ws) { return isLingerieStyle(ws) && worldBookStyleMatchesScene(ws, scene); });
+            return getWorldBookStyles(namesForRoll || selectedWBNames).filter(function(ws) { return isLingerieStyle(ws) && worldBookStyleMatchesScene(ws, scene); });
         }
         var sceneDefs = [
             { key: '外出', label: '外出' },
@@ -2220,18 +2220,34 @@ function renderQuickScenes(d) {
                     }
                 }
                 // Try AI generation, fallback to world book
-                tryGenerateAIDescription(scene, function(aiOutfits) {
-                    var outfits = [];
-                    if (aiOutfits && aiOutfits.length > 0) {
-                        outfits = aiOutfits;
-                    } else {
-                        var modernPool = modernMatches(scene);
-                        var lingeriePool = lingerieMatches(scene);
-                        if (modernPool.length > 0) outfits.push(createWorldBookOutfit(modernPool[Math.floor(Math.random() * modernPool.length)], "wb_qs_" + scene + "_modern", 0));
-                        if (lingeriePool.length > 0) outfits.push(createWorldBookOutfit(lingeriePool[Math.floor(Math.random() * lingeriePool.length)], "wb_qs_" + scene + "_inner", 1));
-                    }
-                    showOutfits(scene, outfits);
-                });
+                var clickSelectedWBNames = getSelectedWorldBookNames(ctx, load());
+                var clickMissingWB = clickSelectedWBNames.some(function (name) { return !worldBookStyleCache[name]; });
+                function startSceneRoll() {
+                    tryGenerateAIDescription(scene, function(aiOutfits) {
+                        var liveSelectedWBNames = getSelectedWorldBookNames(ctx, load());
+                        var outfits = [];
+                        if (aiOutfits && aiOutfits.length > 0) {
+                            outfits = aiOutfits;
+                        } else {
+                            var modernPool = modernMatches(scene, liveSelectedWBNames);
+                            var lingeriePool = lingerieMatches(scene, liveSelectedWBNames);
+                            try { console.log('[OM-WB] quick scene fallback pool:', scene, liveSelectedWBNames, 'modern=' + modernPool.length, 'lingerie=' + lingeriePool.length); } catch (e) {}
+                            if (modernPool.length > 0) outfits.push(createWorldBookOutfit(modernPool[Math.floor(Math.random() * modernPool.length)], "wb_qs_" + scene + "_modern", 0));
+                            if (lingeriePool.length > 0) outfits.push(createWorldBookOutfit(lingeriePool[Math.floor(Math.random() * lingeriePool.length)], "wb_qs_" + scene + "_inner", 1));
+                        }
+                        showOutfits(scene, outfits);
+                    });
+                }
+                if (clickMissingWB) {
+                    var progressEl = modal2.querySelector("#om-roll-progress");
+                    if (progressEl) progressEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin" style="margin-right:8px"></i>读取世界书中...';
+                    refreshWorldBookStyles(clickSelectedWBNames, function () {
+                        try { console.log('[OM-WB] quick scene click refreshed:', clickSelectedWBNames.join(', ')); } catch (e) {}
+                        startSceneRoll();
+                    });
+                } else {
+                    startSceneRoll();
+                }
             });
         });
     }
