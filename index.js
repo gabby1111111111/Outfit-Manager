@@ -8,7 +8,7 @@
 (function () {
 
     var SCRIPT_NAME = '穿搭管理';
-    var OM_VERSION = '21.3.3';
+    var OM_VERSION = '21.3.4';
     var BTN_ID = 'outfit-mgr-ext-btn-v4';
     var DB_NAME = 'outfit_mgr_db';
     var DB_VERSION = 1;
@@ -235,6 +235,7 @@
         if (!d.virtualOutfits) d.virtualOutfits = {};
         if (!d.selectedWorldBookNames || !Array.isArray(d.selectedWorldBookNames)) d.selectedWorldBookNames = [];
         d.selectedWorldBookNames = d.selectedWorldBookNames.filter(isLikelyOutfitWorldBookName);
+        if (d.worldBookSelectionInitialized === undefined) d.worldBookSelectionInitialized = d.selectedWorldBookNames.length > 0;
         if (!d.charNames) d.charNames = [];
         if (!d.apiVision) d.apiVision = def().apiVision;
         else { var dv = def().apiVision; for (var vk in dv) { if (d.apiVision[vk] === undefined) d.apiVision[vk] = dv[vk]; } if (d.apiVision.batchSize && !d.apiVision.concurrency) { d.apiVision.concurrency = Math.min(d.apiVision.batchSize, 5); } delete d.apiVision.batchSize;
@@ -261,6 +262,7 @@
             // 界面状态
             currentView: 'user',
             selectedWorldBookNames: [],
+            worldBookSelectionInitialized: false,
             currentChar: '',
             showBall: true,
             // 注入配置
@@ -960,8 +962,10 @@
     }
     function getSelectedWorldBookNames(ctx, d) {
         var selected = [];
+        if (d && d.worldBookSelectionInitialized === false) {
+            return getDefaultSelectedWorldBookNames(ctx, d);
+        }
         (d && Array.isArray(d.selectedWorldBookNames) ? d.selectedWorldBookNames : []).filter(isLikelyOutfitWorldBookName).forEach(function (name) { addUniqueName(selected, name); });
-        getDefaultSelectedWorldBookNames(ctx, d).forEach(function (name) { addUniqueName(selected, name); });
         return selected;
     }
     function getVisibleWorldBookNames(ctx, d) {
@@ -2118,8 +2122,9 @@ function renderQuickScenes(d) {
             console.warn('[OutfitManager] quick scenes failed to read world books', err);
             return;
         }
-        if ((!d.selectedWorldBookNames || d.selectedWorldBookNames.length === 0) && selectedWBNames.length > 0) {
+        if (d.worldBookSelectionInitialized === false && selectedWBNames.length > 0) {
             d.selectedWorldBookNames = selectedWBNames.slice();
+            d.worldBookSelectionInitialized = true;
             save(d);
         }
         var missingWB = selectedWBNames.some(function (name) { return !worldBookStyleCache[name]; });
@@ -2606,8 +2611,9 @@ function renderQuickScenes(d) {
             return;
         }
         var selectedWBNames = getSelectedWorldBookNames(rollCtx, d);
-        if ((!d.selectedWorldBookNames || d.selectedWorldBookNames.length === 0) && selectedWBNames.length > 0) {
+        if (d.worldBookSelectionInitialized === false && selectedWBNames.length > 0) {
             d.selectedWorldBookNames = selectedWBNames.slice();
+            d.worldBookSelectionInitialized = true;
             save(d);
         }
         if (allOutfits.length === 0 && selectedWBNames.length === 0) { toast('还没有任何穿搭，也没有选择世界书', true); return; }
@@ -2673,24 +2679,24 @@ function renderQuickScenes(d) {
                 var ctx = typeof SillyTavern !== 'undefined' && SillyTavern.getContext ? SillyTavern.getContext() : null;
                 var dd = load();
                 var savedSelected = Array.isArray(dd.selectedWorldBookNames) ? dd.selectedWorldBookNames.filter(isLikelyOutfitWorldBookName) : [];
-                var activeNames = getActiveWorldBookNames(ctx, dd).filter(isLikelyOutfitWorldBookName);
                 var selectedDefaults = getSelectedWorldBookNames(ctx, dd);
                 var wbNames = getVisibleWorldBookNames(ctx, dd);
                 if (wbNames.length === 0) {
                     container.innerHTML = '<span style="opacity:.5">没有找到可用穿搭世界书，请先在酒馆中创建、启用或选择世界书。</span>';
                     return;
                 }
-                var selected = selectedDefaults.slice();
-                savedSelected.forEach(function(name) { addUniqueName(selected, name); });
-                activeNames.forEach(function(name) { addUniqueName(selected, name); });
+                var selected = dd.worldBookSelectionInitialized === false ? selectedDefaults.slice() : savedSelected.slice();
+                if (dd.worldBookSelectionInitialized === false) {
+                    dd.selectedWorldBookNames = selected.slice();
+                    dd.worldBookSelectionInitialized = true;
+                    save(dd);
+                }
                 var h = '';
                 wbNames.forEach(function(name, idx) {
                     var checked = selected.indexOf(name) !== -1 ? ' checked' : '';
                     h += '<label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" class="om-roll-wb-book" value="' + name.replace(/"/g,'&quot;') + '"' + checked + ' /> ' + name.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</label>';
                 });
                 container.innerHTML = h;
-                dd.selectedWorldBookNames = selected;
-                save(dd);
                 var goBtn = sheet.querySelector('#om-roll-go');
                 if (goBtn) { goBtn.disabled = true; goBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 加载世界书...'; }
                 // Save selection on change
@@ -2699,6 +2705,7 @@ function renderQuickScenes(d) {
                         var dd2 = load();
                         dd2.selectedWorldBookNames = [];
                         container.querySelectorAll('.om-roll-wb-book:checked').forEach(function(c) { dd2.selectedWorldBookNames.push(c.value); });
+                        dd2.worldBookSelectionInitialized = true;
                         save(dd2);
                         refreshRollFilterOptions(dd2.selectedWorldBookNames);
                     });
@@ -4236,8 +4243,9 @@ function renderQuickScenes(d) {
         // Auto-roll: if nothing active, pick from selected world books after they are loaded.
         var startupCtx = typeof SillyTavern !== 'undefined' && SillyTavern.getContext ? SillyTavern.getContext() : null;
         var startupWorldBooks = getSelectedWorldBookNames(startupCtx, d);
-        if ((!d.selectedWorldBookNames || d.selectedWorldBookNames.length === 0) && startupWorldBooks.length > 0) {
+        if (d.worldBookSelectionInitialized === false && startupWorldBooks.length > 0) {
             d.selectedWorldBookNames = startupWorldBooks.slice();
+            d.worldBookSelectionInitialized = true;
             save(d);
         }
         var hasExistingData = (d.virtualOutfits && Object.keys(d.virtualOutfits).length > 0) || (d.outfits && d.outfits.length > 0);
