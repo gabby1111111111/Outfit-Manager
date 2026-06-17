@@ -8,7 +8,7 @@
 (function () {
 
     var SCRIPT_NAME = '穿搭管理';
-    var OM_VERSION = '21.3.2';
+    var OM_VERSION = '21.3.3';
     var BTN_ID = 'outfit-mgr-ext-btn-v4';
     var DB_NAME = 'outfit_mgr_db';
     var DB_VERSION = 1;
@@ -44,6 +44,14 @@
             if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) return SillyTavern.getContext();
         } catch (e) {}
         return null;
+    }
+
+    function getSTRequestHeaders(ctx) {
+        try {
+            if (ctx && typeof ctx.getRequestHeaders === 'function') return ctx.getRequestHeaders();
+            if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getRequestHeaders === 'function') return SillyTavern.getRequestHeaders();
+        } catch (e) {}
+        return { 'Content-Type': 'application/json' };
     }
 
     function getSharedSettingsRoot() {
@@ -861,6 +869,10 @@
     
     var worldBookStyleCache = {};
     var worldBookStylesLoaded = false;
+    var worldBookNameCache = [];
+    var worldBookNameListLoaded = false;
+    var worldBookNameListLoading = false;
+    var worldBookNameListCallbacks = [];
     var worldBookClothingPattern = /(?:名称|风格|季节|场景|描述|核心风格|生成规则|定义|单品|配色|妆容搭配|可选配饰|可选鞋履|搭配技巧|搭配示例)\s*[：:]/;
     var worldBookClothingPartPattern = /^\s*(?:[-*]\s*)?(上衣|内搭|下装|裙装|外搭|外套|连衣裙|旗袍|礼服|服装|配饰|鞋袜|鞋子|袜子|假发|角色|文胸|内裤|配件|文胸与内裤一体|内裤部分|单品|可选配饰|可选鞋履|搭配示例)\s*[：:]/m;
     function getWorldBookStyles(names) {
@@ -889,14 +901,56 @@
         return names;
     }
     function getKnownWorldBookNames(ctx) {
-        try { return ctx && ctx.getWorldInfoNames ? ctx.getWorldInfoNames().filter(Boolean) : []; }
-        catch (e) { return []; }
+        var names = [];
+        try { (ctx && ctx.getWorldInfoNames ? ctx.getWorldInfoNames().filter(Boolean) : []).forEach(function (name) { addUniqueName(names, name); }); }
+        catch (e) {}
+        worldBookNameCache.forEach(function (name) { addUniqueName(names, name); });
+        return names;
     }
     function isLikelyOutfitWorldBookName(name) {
         return /uu|sfw/i.test(String(name || ''));
     }
     function addUniqueName(list, name) {
         if (name && list.indexOf(name) === -1) list.push(name);
+    }
+    function refreshKnownWorldBookNames(cb) {
+        if (cb) worldBookNameListCallbacks.push(cb);
+        if (worldBookNameListLoaded) {
+            var callbacksNow = worldBookNameListCallbacks.splice(0);
+            callbacksNow.forEach(function (fn) { try { fn(worldBookNameCache.slice()); } catch (e) {} });
+            return;
+        }
+        if (worldBookNameListLoading) return;
+        worldBookNameListLoading = true;
+        var ctx = typeof SillyTavern !== 'undefined' && SillyTavern.getContext ? SillyTavern.getContext() : null;
+        fetch('/api/worldinfo/list', {
+            method: 'POST',
+            headers: getSTRequestHeaders(ctx),
+            body: JSON.stringify({}),
+            cache: 'no-cache'
+        }).then(function (r) {
+            if (!r.ok) throw new Error('worldinfo/list failed: ' + r.status);
+            return r.json();
+        }).then(function (list) {
+            var names = [];
+            if (Array.isArray(list)) {
+                list.forEach(function (item) {
+                    if (typeof item === 'string') addUniqueName(names, item);
+                    else if (item) {
+                        addUniqueName(names, item.file_id || item.name);
+                    }
+                });
+            }
+            worldBookNameCache = names;
+            try { console.log('[OM-WB] backend world book list:', names.filter(isLikelyOutfitWorldBookName).join(', ')); } catch (e) {}
+        }).catch(function (err) {
+            try { console.warn('[OM-WB] backend world book list failed:', err); } catch (e) {}
+        }).finally(function () {
+            worldBookNameListLoaded = true;
+            worldBookNameListLoading = false;
+            var callbacksDone = worldBookNameListCallbacks.splice(0);
+            callbacksDone.forEach(function (fn) { try { fn(worldBookNameCache.slice()); } catch (e) {} });
+        });
     }
     function getDefaultSelectedWorldBookNames(ctx, d) {
         var names = [];
@@ -2051,6 +2105,10 @@ function renderQuickScenes(d) {
         if (!el) return;
         el.innerHTML = '<span class="om-quick-title">场景</span><div class="om-quick-panel"><span style="font-size:.76em;opacity:.62;white-space:nowrap">加载中</span></div>';
         var ctx = typeof SillyTavern !== 'undefined' && SillyTavern.getContext ? SillyTavern.getContext() : null;
+        if (!worldBookNameListLoaded) {
+            refreshKnownWorldBookNames(function () { renderQuickScenes(load()); });
+            return;
+        }
         var selectedWBNames = [];
         try {
             selectedWBNames = getSelectedWorldBookNames(ctx, d);
@@ -2542,6 +2600,11 @@ function renderQuickScenes(d) {
     function openRandomRoll() {
         var d = load(); var allOutfits = getViewOutfits(d);
         var rollCtx = typeof SillyTavern !== 'undefined' && SillyTavern.getContext ? SillyTavern.getContext() : null;
+        if (!worldBookNameListLoaded) {
+            toast('正在读取世界书列表...', false, 1500);
+            refreshKnownWorldBookNames(function () { openRandomRoll(); });
+            return;
+        }
         var selectedWBNames = getSelectedWorldBookNames(rollCtx, d);
         if ((!d.selectedWorldBookNames || d.selectedWorldBookNames.length === 0) && selectedWBNames.length > 0) {
             d.selectedWorldBookNames = selectedWBNames.slice();
