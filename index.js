@@ -3514,14 +3514,19 @@ function renderQuickScenes(d) {
     }
 
     function importData() {
+        var d0 = load();
+        var currentLabel = d0.currentView === 'char' && d0.currentChar ? '「' + d0.currentChar + '」衣柜' : 'User 衣柜';
         var modal = document.createElement('div');
         modal.className = 'om-modal';
         modal.style.setProperty('z-index', '2147483647', 'important');
         modal.innerHTML = '<div class="om-modal-box">' +
             '<div class="om-modal-title"><i class="fa-solid fa-upload" style="margin-right:6px"></i>导入数据</div>' +
-            '<div class="om-hint" style="margin-bottom:10px">选择之前导出的 .json 文件。</div>' +
-            '<button class="om-modal-btn" id="om-imp-merge"><i class="fa-solid fa-code-merge" style="margin-right:8px"></i>合并导入<br><small style="opacity:.6;font-weight:400">追加到现有数据，不覆盖</small></button>' +
-            '<button class="om-modal-btn" id="om-imp-replace"><i class="fa-solid fa-arrows-rotate" style="margin-right:8px"></i>覆盖导入<br><small style="opacity:.6;font-weight:400">替换现有穿搭（预设保留）</small></button>' +
+            '<div class="om-hint" style="margin-bottom:10px">选择之前导出的 .json 文件。当前目标：' + esc(currentLabel) + '</div>' +
+            '<button class="om-modal-btn" id="om-imp-current-merge"><i class="fa-solid fa-code-merge" style="margin-right:8px"></i>合并到当前衣柜<br><small style="opacity:.6;font-weight:400">把文件里的衣服追加到 ' + esc(currentLabel) + '</small></button>' +
+            '<button class="om-modal-btn" id="om-imp-current-replace"><i class="fa-solid fa-arrows-rotate" style="margin-right:8px"></i>覆盖当前衣柜<br><small style="opacity:.6;font-weight:400">用文件里的衣服替换 ' + esc(currentLabel) + '</small></button>' +
+            '<div class="om-hint" style="margin:10px 0 6px">也可以按文件原来的归属导入：</div>' +
+            '<button class="om-modal-btn" id="om-imp-file-merge"><i class="fa-solid fa-file-import" style="margin-right:8px"></i>按文件归属合并<br><small style="opacity:.6;font-weight:400">User文件进User，角色文件进原角色</small></button>' +
+            '<button class="om-modal-btn" id="om-imp-file-replace"><i class="fa-solid fa-database" style="margin-right:8px"></i>按文件归属覆盖<br><small style="opacity:.6;font-weight:400">替换文件对应的衣柜（预设保留）</small></button>' +
             '<input type="file" id="om-imp-file" accept=".json" style="display:none" />' +
             '<button class="om-modal-cancel" id="om-imp-cancel">取消</button></div>';
         var _mp2 = getPopupLayer();
@@ -3531,14 +3536,17 @@ function renderQuickScenes(d) {
         modal.querySelector('#om-imp-cancel').addEventListener('click', function () { _mp2.removeChild(modal); });
         var fileInp = document.getElementById('om-imp-file');
         var importMode = 'merge';
-        function triggerImport(mode) { importMode = mode; fileInp.click(); }
-        document.getElementById('om-imp-merge').addEventListener('click', function () { triggerImport('merge'); });
-        document.getElementById('om-imp-replace').addEventListener('click', function () { triggerImport('replace'); });
+        var importTarget = 'current';
+        function triggerImport(mode, target) { importMode = mode; importTarget = target || 'current'; fileInp.click(); }
+        document.getElementById('om-imp-current-merge').addEventListener('click', function () { triggerImport('merge', 'current'); });
+        document.getElementById('om-imp-current-replace').addEventListener('click', function () { triggerImport('replace', 'current'); });
+        document.getElementById('om-imp-file-merge').addEventListener('click', function () { triggerImport('merge', 'file'); });
+        document.getElementById('om-imp-file-replace').addEventListener('click', function () { triggerImport('replace', 'file'); });
         fileInp.addEventListener('change', function () {
             var file = fileInp.files[0]; if (!file) return;
             var reader = new FileReader();
             reader.onload = function (e) {
-                try { var imported = JSON.parse(e.target.result); _mp2.removeChild(modal); processImport(imported, importMode); }
+                try { var imported = JSON.parse(e.target.result); _mp2.removeChild(modal); processImport(imported, importMode, importTarget); }
                 catch (err) { toast('文件解析失败，请确认是有效的 JSON 文件', true); }
             };
             reader.onerror = function () { toast('文件读取失败', true); };
@@ -3546,7 +3554,47 @@ function renderQuickScenes(d) {
         });
     }
 
-    function processImport(imported, mode) {
+    function getImportWardrobePayload(imported) {
+        if (!imported) return null;
+        if (Array.isArray(imported.outfits)) {
+            return { outfits: imported.outfits, categories: imported.categories || [], presets: imported.presets || [] };
+        }
+        return null;
+    }
+
+    function importPayloadIntoCurrentWardrobe(dd, payload, mode) {
+        var srcOutfits = (payload.outfits || []).map(function (o) { return Object.assign({}, o, { id: genId() }); });
+        var srcCats = payload.categories || [];
+        var targetLabel = dd.currentView === 'char' && dd.currentChar ? '「' + dd.currentChar + '」' : 'User';
+
+        if (dd.currentView === 'char' && dd.currentChar) {
+            var cd = getCharData(dd, dd.currentChar);
+            if (mode === 'replace') {
+                cd.outfits = srcOutfits;
+                cd.categories = srcCats.slice();
+                cd.activeIds = [];
+            } else {
+                srcOutfits.forEach(function (o) { cd.outfits.push(o); });
+                srcCats.forEach(function (c) { if (cd.categories.indexOf(c) === -1) cd.categories.push(c); });
+            }
+        } else {
+            if (mode === 'replace') {
+                dd.outfits = srcOutfits;
+                dd.categories = srcCats.slice();
+                dd.activeIds = [];
+            } else {
+                srcOutfits.forEach(function (o) { dd.outfits.push(o); });
+                srcCats.forEach(function (c) { if (dd.categories.indexOf(c) === -1) dd.categories.push(c); });
+                if ((payload.presets || []).length > 0) {
+                    if (!Array.isArray(dd.presets)) dd.presets = [];
+                    payload.presets.forEach(function (p2) { if (p2) dd.presets.push(Object.assign({}, p2, { id: genId() })); });
+                }
+            }
+        }
+        return { count: srcOutfits.length, targetLabel: targetLabel };
+    }
+
+    function processImport(imported, mode, target) {
         var dd = load();
         try {
             // 1. 预设导入
@@ -3556,7 +3604,17 @@ function renderQuickScenes(d) {
                 dd.presets.push(p); save(dd); renderGrid(); toast('✅ 已导入预设：' + p.name); return;
             }
 
-            // 2. 单个角色导入
+            // 2. 导入到当前衣柜：用于 User ↔ 角色之间搬运衣服
+            if (target === 'current') {
+                var payload = getImportWardrobePayload(imported);
+                if (!payload) { toast('这个文件不能直接导入到当前衣柜，请改用“按文件归属导入”', true); return; }
+                var result = importPayloadIntoCurrentWardrobe(dd, payload, mode);
+                save(dd); renderViewbar(); renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn();
+                toast('✅ 已导入到' + result.targetLabel + '：' + result.count + ' 套穿搭');
+                return;
+            }
+
+            // 3. 单个角色导入
             if (imported.type === 'char' && imported.charName) {
                 var cn = imported.charName;
                 if (!dd.chars) dd.chars = {};
@@ -3576,7 +3634,7 @@ function renderQuickScenes(d) {
                 return;
             }
 
-            // 3. 全部角色导入
+            // 4. 全部角色导入
             if (imported.type === 'chars_all' && imported.chars) {
                 if (!dd.chars) dd.chars = {};
                 if (!dd.charNames) dd.charNames = [];
@@ -3601,7 +3659,7 @@ function renderQuickScenes(d) {
                 return;
             }
 
-            // 4. User穿搭导入（type='user' 或旧格式无type）
+            // 5. User穿搭导入（type='user' 或旧格式无type）
             var srcOutfits = imported.outfits || [], srcCats = imported.categories || [], srcPresets = imported.presets || [];
             if (mode === 'replace') {
                 dd.outfits = srcOutfits.map(function (o) { return Object.assign({}, o, { id: genId() }); });
