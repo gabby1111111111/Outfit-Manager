@@ -361,6 +361,10 @@ _cleanOutfitResult()   Removes leaked <horae>/<content>/<status> blocks
 
 Use `ctx.generateRaw`, not `generateQuietPrompt`. `generateQuietPrompt` previously entered ST's full generation pipeline and could hang.
 
+Scene result actions can call the Chatu8 image bridge from the generated text.
+Before sending, sync the editable `.om-roll-desc` textarea back into the outfit
+object, then use the existing Chatu8 preview-first save flow.
+
 ## Prompt Injection Into Normal Chat
 
 Generation and injection are separate.
@@ -439,8 +443,7 @@ Image analysis uses OpenAI-compatible `chat/completions` with image content.
 ## External Frontend / Chatu8 Bridge
 
 智绘姬 / st-chatu8 front-end integration is event-based, not a direct OM API.
-It depends on JS-Slash-Runner / Tavern Helper injecting these globals into the
-front-end iframe or script environment:
+OM should prefer JS-Slash-Runner / Tavern Helper globals when available:
 
 ```js
 eventEmit
@@ -449,8 +452,9 @@ eventRemoveListener
 ```
 
 Before adding OM features that call 智绘姬, detect all three functions and fail
-gracefully if they are missing. Do not assume they exist in the normal OM
-extension page.
+gracefully if they are missing. Since st-chatu8 also listens on SillyTavern's
+`eventSource`, OM may fall back to dynamically importing `/script.js` and using
+`eventSource.on/emit/removeListener`.
 
 Known 智绘姬 image generation events:
 
@@ -474,6 +478,14 @@ Response payload includes:
 `imageData` is a base64/data URL image. For OM, prefer preview-first behavior
 and only write it into wardrobe data after explicit user confirmation, because
 base64 images can bloat shared settings.
+
+When st-chatu8 also inserts its generated chat image into the page, that image
+can use a max z-index and cover OM sheets. Before opening OM preview/save sheets,
+keep `.om-overlay` at `2147483647` and re-append it to the end of `body` so the
+sheet remains visible and clickable.
+
+OM sheets may also open from inside `.om-modal` result dialogs. Keep sheet
+overlays above modal layers so Chatu8 preview/save controls remain clickable.
 
 Known 智绘姬 character/outfit import events:
 
