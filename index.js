@@ -586,6 +586,8 @@
             'animation:om-fadein .18s ease;font-size:14px;box-sizing:border-box;overflow:hidden;}',
             '.om-overlay.om-windowed{border:1px solid rgba(127,127,127,.22);border-radius:14px;',
             'box-shadow:0 18px 60px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.04);}',
+            '.om-overlay.om-fullscreen .om-head{padding-top:calc(12px + constant(safe-area-inset-top));',
+            'padding-top:calc(12px + env(safe-area-inset-top,0px));}',
             '.om-overlay.om-windowed .om-head{border-radius:14px 14px 0 0;cursor:move;user-select:none;}',
             '.om-overlay.om-windowed .om-head-actions,.om-overlay.om-windowed .om-head-actions *{cursor:auto;}',
             '.om-resize-handle{display:none;position:absolute;width:18px;height:18px;z-index:1200;pointer-events:auto;touch-action:none;}',
@@ -840,6 +842,12 @@
             '.om-sheet-title{font-weight:700;font-size:1.05em;padding:10px 0 14px;',
             'display:flex;align-items:center;gap:8px;}',
             '.om-sheet-title i{color:var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.om-settings-title{justify-content:space-between;gap:12px;}',
+            '.om-settings-title-main{display:flex;align-items:center;gap:8px;min-width:0;}',
+            '.om-sheet-close{display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(127,127,127,.2);',
+            'background:rgba(127,127,127,.08);color:inherit;border-radius:999px;padding:6px 10px;',
+            'font-size:.78em;line-height:1;cursor:pointer;font-family:inherit;flex-shrink:0;}',
+            '.om-sheet-close:hover{background:rgba(127,127,127,.16);border-color:var(--SmartThemeQuoteColor,#7c6daf);color:var(--SmartThemeQuoteColor,#7c6daf);}',
 
             /* ══ 长按操作菜单 Bottom Sheet ══ */
             '.om-ctx-item{display:flex;align-items:center;gap:12px;padding:14px 4px;',
@@ -2904,7 +2912,10 @@ function renderQuickScenes(d) {
         var seopts = seasons.map(function (s) { return '<option value="' + esc(s) + '">' + esc(s) + '</option>'; }).join('');
         var scopts = scenes.map(function (s) { return '<option value="' + esc(s) + '">' + esc(s) + '</option>'; }).join('');
         var sheet = createSheet([
-            '<div class="om-sheet-title"><i class="fa-solid fa-dice"></i>随机搭配</div>',
+            '<div class="om-sheet-title om-settings-title">' +
+            '<span class="om-settings-title-main"><i class="fa-solid fa-dice"></i>随机搭配</span>' +
+            '<button class="om-sheet-close" id="om-roll-close-sheet" type="button" title="退出随机搭配"><i class="fa-solid fa-xmark"></i>退出</button>' +
+            '</div>',
             '<div class="om-field"><label style="font-weight:600;font-size:.85em;margin-bottom:4px">世界书风格</label>',
             '<div style="display:flex;flex-direction:column;gap:4px;font-size:.82em">',
             '<div id="om-roll-wb-list" style="display:flex;flex-direction:column;gap:4px;font-size:.82em"><i class="fa-solid fa-spinner fa-spin"></i> 加载世界书...</div>',
@@ -3167,6 +3178,7 @@ function renderQuickScenes(d) {
             sheet.querySelector('#om-roll-result-area').style.display = '';
             openRollResultModal(h);
         }
+        sheet.querySelector('#om-roll-close-sheet').addEventListener('click', function () { closeSheet(sheet); });
         sheet.querySelector('#om-roll-go').addEventListener('click', doRoll);
         sheet.querySelector('#om-roll-cancel').addEventListener('click', function () { closeSheet(sheet); });
         sheet.querySelector('#om-roll-apply').addEventListener('click', function () { if (!lastResult) return; var dd = load(); dd.activeIds = []; if (dd.chars) for (var cn in dd.chars) dd.chars[cn].activeIds = []; var ids = []; lastResult.outfits.forEach(function (o) { if (o.isVirtual) { var no = { id: genId(), name: o.name, category: o.category || '', type: 'outfit', style: o.style || '', season: o.season || '', sceneTag: o.sceneTag || '', description: o.description || '', imageData: null, createdAt: Date.now(), isVirtual: true }; dd.virtualOutfits[no.id] = no; ids.push(no.id); } else { ids.push(o.id); } }); lastResult.items.forEach(function (o) { ids.push(o.id); }); if (dd.currentView === 'char' && dd.currentChar) getCharData(dd, dd.currentChar).activeIds = ids; else dd.activeIds = ids; save(dd); closeSheet(sheet); toast('已应用！(' + ids.length + '件)'); renderGrid(); renderBottomStatus(); updateBtn(); });
@@ -3357,12 +3369,17 @@ function renderQuickScenes(d) {
         }
 
         var sheet = createSheet([
-            '<div class="om-sheet-title"><i class="fa-solid fa-bookmark"></i>预设管理</div>',
+            '<div class="om-sheet-title om-settings-title">' +
+            '<span class="om-settings-title-main"><i class="fa-solid fa-bookmark"></i>预设管理</span>' +
+            '<button class="om-sheet-close" id="om-presets-close" type="button" title="退出预设管理"><i class="fa-solid fa-xmark"></i>退出</button>' +
+            '</div>',
             '<div class="om-sec-title">已保存的预设 <span class="om-hint">点击名称加载</span></div>',
             presetListHtml,
             '<div class="om-divider"></div>',
             saveSection,
         ].join(''));
+
+        sheet.querySelector('#om-presets-close').addEventListener('click', function () { closeSheet(sheet); });
 
         // 覆盖保存到当前预设
         var overwriteBtn = sheet.querySelector('#om-preset-overwrite');
@@ -3430,7 +3447,10 @@ function renderQuickScenes(d) {
         var imgCount = d.outfits.filter(function (o) { return !!o.imageData; }).length;
 
         var sheet = createSheet([
-            '<div class="om-sheet-title"><i class="fa-solid fa-sliders"></i>设置</div>',
+            '<div class="om-sheet-title om-settings-title">' +
+            '<span class="om-settings-title-main"><i class="fa-solid fa-sliders"></i>设置</span>' +
+            '<button class="om-sheet-close" id="om-settings-close" type="button" title="退出设置"><i class="fa-solid fa-xmark"></i>退出</button>' +
+            '</div>',
 
             '<div class="om-sec-title">发送内容</div>',
             '<div class="om-setting-row"><label>发送给 AI 的内容类型</label><select id="om-mode">',
@@ -3505,6 +3525,7 @@ function renderQuickScenes(d) {
             '<div class="om-setting-row om-row-inline"><label>注入时显示 Toast 提示</label><input type="checkbox" class="om-chk" id="om-debug"' + (d.debug ? ' checked' : '') + ' /></div>',
         ].join(''));
 
+        sheet.querySelector('#om-settings-close').addEventListener('click', function () { closeSheet(sheet); });
         sheet.querySelector('#om-mode').addEventListener('change', function () { var dd = load(); dd.mode = this.value; save(dd); });
         sheet.querySelector('#om-inject-pos').addEventListener('change', function () { var dd = load(); dd.injectPosition = this.value; save(dd); });
         sheet.querySelector('#om-auto-roll').addEventListener('change', function () { var dd = load(); dd.autoRollDisabled = !this.checked; save(dd); });
