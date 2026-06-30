@@ -328,6 +328,7 @@
         var dd = def();
         if (!d) return dd;
         for (var k in dd) { if (d[k] === undefined) d[k] = dd[k]; }
+        migrateOldInjectionTemplates(d, dd);
         if (d.activeId && !d.activeIds) d.activeIds = [d.activeId];
         if (!Array.isArray(d.activeIds)) d.activeIds = [];
         if (!Array.isArray(d.presets)) d.presets = [];
@@ -343,6 +344,31 @@
         // v17→v18迁移：把带owner的穿搭移入chars
         migrateV17(d);
         return d;
+    }
+
+    function migrateOldInjectionTemplates(d, dd) {
+        var old = {
+            singleTemplate: '[User当前穿着]\n{{description}}\n（禁止编造其他服装。严禁集中罗列服装信息，服装细节必须分散融入不同的动作、触感、环境互动中，每次只带出一两个细节。）',
+            multiTemplate: '[User的可选穿搭]\n{{wardrobe}}\n（禁止编造以上之外的服装。根据场景标签匹配穿搭，若回复中出现场景转换则对应切换穿搭。严禁集中罗列服装信息，服装细节必须分散融入动作、触感、环境互动中，每次只带出一两个细节。）',
+            charSingleTemplate: '[{{charName}}当前穿着]\n{{description}}\n（禁止编造其他服装。严禁集中罗列服装信息，服装细节必须分散融入不同的动作、触感、环境互动中，每次只带出一两个细节。）',
+            charMultiTemplate: '[{{charName}}的可选穿搭]\n{{wardrobe}}\n（禁止编造以上之外的服装。根据场景标签匹配穿搭，若回复中出现场景转换则对应切换穿搭。严禁集中罗列服装信息，服装细节必须分散融入动作、触感、环境互动中，每次只带出一两个细节。）',
+            imagePrompt: '图中为角色当前穿着，禁止编造其他服装。严禁集中罗列，服装细节必须分散融入动作、触感、环境互动中，每次只带出一两个细节。',
+            multiImagePrompt: '以上图片为可选穿搭，根据场景标签匹配，场景转换则切换穿搭，禁止编造其他服装。严禁集中罗列，细节分散融入动作和互动中。'
+        };
+        Object.keys(old).forEach(function (key) {
+            if (d[key] === old[key]) d[key] = dd[key];
+        });
+        var soft = {
+            singleTemplate: '[User当前穿着]\n{{description}}\n以上是当前服装状态，仅作为连续性参考；无需每轮主动描写衣服。',
+            multiTemplate: '[User当前穿着参考]\n{{wardrobe}}\n以上是当前服装状态，仅作为连续性参考；根据场景需要选用，不必每轮主动描写衣服。',
+            charSingleTemplate: '[{{charName}}当前穿着]\n{{description}}\n以上是当前服装状态，仅作为连续性参考；无需每轮主动描写衣服。',
+            charMultiTemplate: '[{{charName}}当前穿着参考]\n{{wardrobe}}\n以上是当前服装状态，仅作为连续性参考；根据场景需要选用，不必每轮主动描写衣服。',
+            imagePrompt: '图中为角色当前穿着，仅作为服装连续性参考；无需每轮主动描写衣服。',
+            multiImagePrompt: '以上图片为当前穿着参考；根据场景需要选用，保持连续性即可。'
+        };
+        Object.keys(soft).forEach(function (key) {
+            if (d[key] === soft[key]) d[key] = dd[key];
+        });
     }
 
     function def() {
@@ -369,12 +395,12 @@
             mode: 'text',
             injectPosition: 'user',
             autoRollDisabled: false,  // 关闭自动随机穿搭
-            singleTemplate: '[User当前穿着]\n{{description}}\n（禁止编造其他服装。严禁集中罗列服装信息，服装细节必须分散融入不同的动作、触感、环境互动中，每次只带出一两个细节。）',
-            multiTemplate: '[User的可选穿搭]\n{{wardrobe}}\n（禁止编造以上之外的服装。根据场景标签匹配穿搭，若回复中出现场景转换则对应切换穿搭。严禁集中罗列服装信息，服装细节必须分散融入动作、触感、环境互动中，每次只带出一两个细节。）',
-            charSingleTemplate: '[{{charName}}当前穿着]\n{{description}}\n（禁止编造其他服装。严禁集中罗列服装信息，服装细节必须分散融入不同的动作、触感、环境互动中，每次只带出一两个细节。）',
-            charMultiTemplate: '[{{charName}}的可选穿搭]\n{{wardrobe}}\n（禁止编造以上之外的服装。根据场景标签匹配穿搭，若回复中出现场景转换则对应切换穿搭。严禁集中罗列服装信息，服装细节必须分散融入动作、触感、环境互动中，每次只带出一两个细节。）',
-            imagePrompt: '图中为角色当前穿着，禁止编造其他服装。严禁集中罗列，服装细节必须分散融入动作、触感、环境互动中，每次只带出一两个细节。',
-            multiImagePrompt: '以上图片为可选穿搭，根据场景标签匹配，场景转换则切换穿搭，禁止编造其他服装。严禁集中罗列，细节分散融入动作和互动中。',            itemSingleTemplate: '[User单品衣柜]\
+            singleTemplate: '[User当前穿着]\n{{description}}',
+            multiTemplate: '[User当前穿着参考]\n{{wardrobe}}',
+            charSingleTemplate: '[{{charName}}当前穿着]\n{{description}}',
+            charMultiTemplate: '[{{charName}}当前穿着参考]\n{{wardrobe}}',
+            imagePrompt: '图中为角色当前穿着。',
+            multiImagePrompt: '以上图片为当前穿着参考。',            itemSingleTemplate: '[User单品衣柜]\
 {{wardrobe}}\
 （以上为当前可用的单品库存，禁止编造以上之外的服装单品。）',            itemMultiTemplate: '[User穿搭+单品]\
 {{outfits}}\
@@ -503,6 +529,95 @@
         return null;
     }
 
+    function currentOwnerKey(d) {
+        if (d.currentView === 'char' && d.currentChar) return 'char:' + d.currentChar;
+        return 'user';
+    }
+
+    function getOwnerStore(d, ownerKey) {
+        if (ownerKey === 'user') {
+            if (!Array.isArray(d.outfits)) d.outfits = [];
+            if (!Array.isArray(d.categories)) d.categories = [];
+            if (!Array.isArray(d.activeIds)) d.activeIds = [];
+            return { key: 'user', label: 'User', outfits: d.outfits, categories: d.categories, activeIds: d.activeIds };
+        }
+        if (ownerKey && ownerKey.indexOf('char:') === 0) {
+            var charName = ownerKey.slice(5);
+            if (!charName) return null;
+            var cd = getCharData(d, charName);
+            if (!Array.isArray(cd.outfits)) cd.outfits = [];
+            if (!Array.isArray(cd.categories)) cd.categories = [];
+            if (!Array.isArray(cd.activeIds)) cd.activeIds = [];
+            return { key: ownerKey, label: charName, outfits: cd.outfits, categories: cd.categories, activeIds: cd.activeIds };
+        }
+        return null;
+    }
+
+    function getWardrobeOwnerOptions(d) {
+        var names = [];
+        if (Array.isArray(d.charNames)) {
+            d.charNames.forEach(function (name) {
+                if (name && names.indexOf(name) === -1) names.push(name);
+            });
+        }
+        if (d.chars) {
+            Object.keys(d.chars).forEach(function (name) {
+                if (name && names.indexOf(name) === -1) names.push(name);
+            });
+        }
+        if (d.currentView === 'char' && d.currentChar && names.indexOf(d.currentChar) === -1) names.push(d.currentChar);
+        return [{ key: 'user', label: 'User' }].concat(names.map(function (name) {
+            return { key: 'char:' + name, label: name };
+        }));
+    }
+
+    function cloneOutfitForOwnerTransfer(o, sameOwnerCopy) {
+        var cloned = JSON.parse(JSON.stringify(o || {}));
+        cloned.id = genId();
+        if (!cloned.createdAt) cloned.createdAt = Date.now();
+        if (sameOwnerCopy && cloned.name) cloned.name = cloned.name + ' 副本';
+        delete cloned.isVirtual;
+        delete cloned.worldBookStyle;
+        return cloned;
+    }
+
+    function addMissingCategory(targetStore, category) {
+        if (!category) return;
+        if (targetStore.categories.indexOf(category) === -1) targetStore.categories.push(category);
+    }
+
+    function resolveOutfitImage(o) {
+        if (!o) return '';
+        return o.imageUrl || o.imageRef || o.imageData || '';
+    }
+
+    function hasOutfitImage(o) {
+        return !!resolveOutfitImage(o);
+    }
+
+    function countAllOutfits(d) {
+        var count = (d.outfits || []).length;
+        if (d.chars) {
+            Object.keys(d.chars).forEach(function (cn) {
+                count += ((d.chars[cn] && d.chars[cn].outfits) || []).length;
+            });
+        }
+        return count;
+    }
+
+    function countAllOutfitImages(d) {
+        var count = 0;
+        (d.outfits || []).forEach(function (o) { if (hasOutfitImage(o)) count++; });
+        if (d.chars) {
+            Object.keys(d.chars).forEach(function (cn) {
+                ((d.chars[cn] && d.chars[cn].outfits) || []).forEach(function (o) {
+                    if (hasOutfitImage(o)) count++;
+                });
+            });
+        }
+        return count;
+    }
+
     // 按id查找穿搭（仅当前视角）
     function getViewById(d, id) {
         var list = getViewOutfits(d);
@@ -622,16 +737,60 @@
         return 'data:image/png;base64,' + imageData;
     }
 
+    function getStyleTitleFromDescription(desc) {
+        var lines = String(desc || '').split(/\r?\n/).map(function (line) { return line.trim(); }).filter(Boolean);
+        if (lines.length === 0) return '';
+        var first = lines[0]
+            .replace(/^[-*#\s]+/, '')
+            .replace(/^风格\s*[：:]\s*/, '')
+            .replace(/^名称\s*[：:]\s*/, '')
+            .replace(/^<([^>]{1,40})>$/, '$1')
+            .replace(/^【([^】]{1,40})】$/, '$1')
+            .replace(/^\[([^\]]{1,40})\]$/, '$1')
+            .trim();
+        if (!first || first.length > 40) return '';
+        if (/^(?:上衣|内搭|下装|裙装|外套|外搭|连衣裙|配饰|鞋袜|文胸|内裤)\s*[：:]/.test(first)) return '';
+        return first;
+    }
+
+    function normalizeOutfitForChatu8(outfit, fallbackScene) {
+        var o = Object.assign({}, outfit || {});
+        var title = getStyleTitleFromDescription(o.description);
+        var defaultNameRe = /^(?:外出|约会|办公|通勤|家居|运动|睡前|随机)?搭配$/;
+        if (title) {
+            if (!o.name || defaultNameRe.test(o.name) || (fallbackScene && o.name === fallbackScene + '搭配')) o.name = title;
+            if (!o.style || o.style !== title) o.style = title;
+        } else if (!o.name && fallbackScene) {
+            o.name = fallbackScene + '搭配';
+        }
+        return o;
+    }
+
     function buildChatu8PromptFromOutfit(outfit, owner) {
-        var lines = [];
-        lines.push('full body fashion reference, clear outfit details, no text, no watermark');
-        if (owner && owner !== 'user') lines.push('角色/归属：' + owner);
-        if (outfit.name) lines.push('穿搭名称：' + outfit.name);
+        outfit = normalizeOutfitForChatu8(outfit, outfit && outfit.sceneTag);
+        var lines = [
+            '请生成一张纯穿搭展示图，不是剧情插图。',
+            '',
+            '人物参考：',
+            '默认使用美型服装模特，身材匀称，姿态自然。当前没有可靠外貌参考图时，不要露脸。',
+            '',
+            '当前穿搭：'
+        ];
+        if (owner) lines.push('归属：' + owner);
+        if (outfit.name) lines.push('名称：' + outfit.name);
         if (outfit.style) lines.push('风格：' + outfit.style);
         if (outfit.season) lines.push('季节：' + outfit.season);
         if (outfit.sceneTag) lines.push('适用场景：' + outfit.sceneTag);
-        if (outfit.description) lines.push('服装描述：' + outfit.description);
-        lines.push('画面要求：完整展示服装结构、颜色、材质和搭配层次，背景简洁，重点是衣物。');
+        if (outfit.description) lines.push('描述：' + outfit.description);
+        lines.push('');
+        lines.push('画面要求：');
+        lines.push('- 重点展示衣服版型、颜色、材质、层次和配饰。');
+        lines.push('- 不要改衣服，不要自行换装，不要加入剧情动作。');
+        lines.push('- 构图必须是近景穿搭展示：从脖子以下/下巴以下裁切到膝盖以上或大腿中部，不要全身远景，不要拍到鞋底和大面积地面。');
+        lines.push('- 人物和衣服占画面 85% 以上，背景只保留少量环境，不要大面积空白背景。');
+        lines.push('- 姿势像专业穿搭模特：自然 S 形站姿、微侧身、手扶包带/整理衣领/扶腰/轻拿配饰，避免僵硬正站和双手垂直。');
+        lines.push('- 单人时尚穿搭展示，服装细节清晰，画面类似近距离穿搭自拍/Lookbook。');
+        lines.push('- 避免文字、水印、logo。');
         return lines.join('\n');
     }
 
@@ -655,16 +814,32 @@
 
     function buildChatu8PromptFromActive(items) {
         var lines = [
-            'full body fashion reference, clear outfit details, no text, no watermark',
-            '请根据以下当前穿搭组合生成一张服装展示图，重点表现衣物搭配。'
+            '请生成一张纯穿搭展示图，不是剧情插图。',
+            '',
+            '人物参考：',
+            '默认使用美型服装模特，身材匀称，姿态自然。当前没有可靠外貌参考图时，不要露脸。',
+            '',
+            '当前穿搭组合：'
         ];
         items.forEach(function (it, idx) {
+            var outfit = normalizeOutfitForChatu8(it.outfit, it.outfit && it.outfit.sceneTag);
             lines.push('');
             lines.push('--- 穿搭 ' + (idx + 1) + ' / ' + it.owner + ' ---');
-            lines.push(buildChatu8PromptFromOutfit(it.outfit, it.owner));
+            if (outfit.name) lines.push('名称：' + outfit.name);
+            if (outfit.style) lines.push('风格：' + outfit.style);
+            if (outfit.season) lines.push('季节：' + outfit.season);
+            if (outfit.sceneTag) lines.push('适用场景：' + outfit.sceneTag);
+            if (outfit.description) lines.push('描述：' + outfit.description);
         });
         lines.push('');
-        lines.push('整体要求：服装层次清晰，颜色和材质准确，避免文字、水印、logo。');
+        lines.push('画面要求：');
+        lines.push('- 重点展示衣服版型、颜色、材质、层次和配饰。');
+        lines.push('- 不要改衣服，不要自行换装，不要加入剧情动作。');
+        lines.push('- 构图必须是近景穿搭展示：从脖子以下/下巴以下裁切到膝盖以上或大腿中部，不要全身远景，不要拍到鞋底和大面积地面。');
+        lines.push('- 人物和衣服占画面 85% 以上，背景只保留少量环境，不要大面积空白背景。');
+        lines.push('- 姿势像专业穿搭模特：自然 S 形站姿、微侧身、手扶包带/整理衣领/扶腰/轻拿配饰，避免僵硬正站和双手垂直。');
+        lines.push('- 单人或并列模特的近距离时尚穿搭展示，服装细节清晰，画面类似近距离穿搭自拍/Lookbook。');
+        lines.push('- 避免文字、水印、logo。');
         return lines.join('\n');
     }
 
@@ -798,15 +973,87 @@
         sheet.querySelector('#om-chatu8-close').addEventListener('click', function () { closeSheet(sheet); });
     }
 
+    function openChatu8LoadingSheet(source) {
+        var title = source && source.name ? source.name : '当前穿搭';
+        var state = { userClosed: false };
+        var sheet = createSheet([
+            '<div class="om-sheet-title om-settings-title">' +
+            '<span><i class="fa-solid fa-palette"></i>智绘姬生图中</span>' +
+            '<button class="om-sheet-close" id="om-chatu8-loading-exit" type="button" title="退出智绘姬生图中"><i class="fa-solid fa-xmark"></i>退出</button>' +
+            '</div>',
+            '<div class="om-field"><label>' + esc(title) + '</label>',
+            '<div style="padding:34px 10px;text-align:center;line-height:1.8;opacity:.82">' +
+            '<i class="fa-solid fa-spinner fa-spin" style="font-size:1.35em;margin-bottom:10px;color:var(--SmartThemeQuoteColor,#7c6daf)"></i>' +
+            '<div style="font-weight:700">正在等待智绘姬返回图片...</div>' +
+            '<div style="font-size:.82em;opacity:.72">可以稍等一下，生成完成后会自动打开预览。</div>' +
+            '</div></div>'
+        ].join(''));
+        sheet.querySelector('#om-chatu8-loading-exit').addEventListener('click', function () {
+            state.userClosed = true;
+            closeSheet(sheet);
+        });
+        state.close = function () {
+            try { closeSheet(sheet); } catch (e) {}
+        };
+        return state;
+    }
+
+    function openChatu8PromptConfirmSheet(source, promptText) {
+        var title = source && source.name ? source.name : '当前穿搭';
+        var sheet = createSheet([
+            '<div class="om-sheet-title om-settings-title">' +
+            '<span><i class="fa-solid fa-palette"></i>智绘姬文生图</span>' +
+            '<button class="om-sheet-close" id="om-chatu8-exit" type="button" title="退出智绘姬文生图"><i class="fa-solid fa-xmark"></i>退出</button>' +
+            '</div>',
+            '<div class="om-field"><label>' + esc(title) + '</label>',
+            '<textarea id="om-chatu8-prompt-edit" rows="14" style="resize:vertical;min-height:260px;line-height:1.65">' + esc(promptText || '') + '</textarea></div>',
+            '<div class="om-btn-row" style="margin-top:10px">',
+            '<button class="om-btn om-btn-safe" id="om-chatu8-send"><i class="fa-solid fa-paper-plane"></i> 确认发送</button>',
+            '<button class="om-btn om-btn-outline" id="om-chatu8-cancel">取消</button>',
+            '</div>'
+        ].join(''));
+        var ta = sheet.querySelector('#om-chatu8-prompt-edit');
+        sheet.querySelector('#om-chatu8-send').addEventListener('click', function () {
+            var finalPrompt = ta.value.trim();
+            if (!finalPrompt) { toast('提示词为空', true); return; }
+            var loading = { userClosed: false };
+            var content = sheet.querySelector('.om-sheet-content');
+            if (content) {
+                content.innerHTML = [
+                    '<div class="om-sheet-title om-settings-title">',
+                    '<span><i class="fa-solid fa-palette"></i>智绘姬生图中</span>',
+                    '<button class="om-sheet-close" id="om-chatu8-loading-exit" type="button" title="退出智绘姬生图中"><i class="fa-solid fa-xmark"></i>退出</button>',
+                    '</div>',
+                    '<div class="om-field"><label>' + esc(title) + '</label>',
+                    '<div style="padding:34px 10px;text-align:center;line-height:1.8;opacity:.82">',
+                    '<i class="fa-solid fa-spinner fa-spin" style="font-size:1.35em;margin-bottom:10px;color:var(--SmartThemeQuoteColor,#7c6daf)"></i>',
+                    '<div style="font-weight:700">智绘姬生图中</div>',
+                    '<div style="font-size:.82em;opacity:.72">正在等待图片返回，完成后会自动打开预览。</div>',
+                    '</div></div>'
+                ].join('');
+                content.querySelector('#om-chatu8-loading-exit').addEventListener('click', function () {
+                    loading.userClosed = true;
+                    closeSheet(sheet);
+                });
+            }
+            toast('已发送智绘姬生图请求');
+            requestChatu8Image(finalPrompt, function (err, result) {
+                if (loading.userClosed) return;
+                closeSheet(sheet);
+                if (err) { toast('智绘姬生图失败：' + err, true); return; }
+                openChatu8PreviewSheet(source, result, finalPrompt);
+            });
+        });
+        sheet.querySelector('#om-chatu8-exit').addEventListener('click', function () { closeSheet(sheet); });
+        sheet.querySelector('#om-chatu8-cancel').addEventListener('click', function () { closeSheet(sheet); });
+    }
+
     function generateChatu8ImageForOutfit(outfit, owner) {
         if (!outfit) return;
-        var source = { id: outfit.id, name: outfit.name, owner: owner || currentOwner(load()), outfit: outfit };
-        var promptText = buildChatu8PromptFromOutfit(outfit, source.owner);
-        toast('已发送智绘姬生图请求');
-        requestChatu8Image(promptText, function (err, result) {
-            if (err) { toast('智绘姬生图失败：' + err, true); return; }
-            openChatu8PreviewSheet(source, result, promptText);
-        });
+        var normalized = normalizeOutfitForChatu8(outfit, outfit.sceneTag);
+        var source = { id: normalized.id, name: normalized.name, owner: owner || currentOwner(load()), outfit: normalized };
+        var promptText = buildChatu8PromptFromOutfit(normalized, source.owner);
+        openChatu8PromptConfirmSheet(source, promptText);
     }
 
     function generateChatu8ImageForActive() {
@@ -825,11 +1072,7 @@
                 description: promptText
             }
         };
-        toast('已发送智绘姬生图请求');
-        requestChatu8Image(promptText, function (err, result) {
-            if (err) { toast('智绘姬生图失败：' + err, true); return; }
-            openChatu8PreviewSheet(source, result, promptText);
-        });
+        openChatu8PromptConfirmSheet(source, promptText);
     }
 
     // ── Toast ─────────────────────────────────────────────────
@@ -1931,7 +2174,7 @@
         renderBottomStatus();
         updateBtn();
         toast('衣柜随机：' + pick.name);
-        if (pick.imageData) openLightbox([pick], pick.id);
+        if (hasOutfitImage(pick)) openLightbox([pick], pick.id);
     }
 
 
@@ -2158,6 +2401,83 @@
 
     function renderCharPanel() { /* 兼容 */ }
 
+    function performBatchOwnerMoveCopy(action, selectedIds, targetKey, sheet) {
+        var dd = load();
+        var sourceKey = currentOwnerKey(dd);
+        var sourceStore = getOwnerStore(dd, sourceKey);
+        var targetStore = getOwnerStore(dd, targetKey);
+        if (!sourceStore || !targetStore) { toast('找不到目标衣柜', true); return; }
+        if (action === 'move' && sourceKey === targetKey) { toast('不能转移给当前衣柜', true); return; }
+
+        var selectedMap = {};
+        selectedIds.forEach(function (id) { selectedMap[id] = true; });
+        var selectedOutfits = sourceStore.outfits.filter(function (o) { return selectedMap[o.id]; });
+        if (selectedOutfits.length === 0) {
+            toast('所选内容里没有可操作的已保存穿搭', true);
+            return;
+        }
+
+        var sameOwnerCopy = action === 'copy' && sourceKey === targetKey;
+        selectedOutfits.forEach(function (o) {
+            var cloned = cloneOutfitForOwnerTransfer(o, sameOwnerCopy);
+            targetStore.outfits.push(cloned);
+            addMissingCategory(targetStore, cloned.category);
+        });
+
+        if (action === 'move') {
+            for (var i = sourceStore.outfits.length - 1; i >= 0; i--) {
+                if (selectedMap[sourceStore.outfits[i].id]) sourceStore.outfits.splice(i, 1);
+            }
+            for (var j = sourceStore.activeIds.length - 1; j >= 0; j--) {
+                if (selectedMap[sourceStore.activeIds[j]]) sourceStore.activeIds.splice(j, 1);
+            }
+        }
+
+        save(dd);
+        if (sheet) closeSheet(sheet);
+        var skipped = selectedIds.length - selectedOutfits.length;
+        var actionText = action === 'move' ? '转移' : '复制';
+        toast('已' + actionText + ' ' + selectedOutfits.length + ' 套到「' + targetStore.label + '」' + (skipped > 0 ? '，跳过 ' + skipped + ' 个临时项' : ''));
+        batchSelected = [];
+        renderCatbar();
+        renderGrid();
+        renderBottomStatus();
+        updateBtn();
+    }
+
+    function openBatchTransferCopySheet(action, selectedIds) {
+        var d = load();
+        var sourceKey = currentOwnerKey(d);
+        var sourceStore = getOwnerStore(d, sourceKey);
+        var options = getWardrobeOwnerOptions(d);
+        var actionText = action === 'move' ? '转移' : '复制';
+        if (action === 'move') options = options.filter(function (opt) { return opt.key !== sourceKey; });
+        if (options.length === 0) {
+            toast('暂无可转移目标，请先创建角色衣柜', true);
+            return;
+        }
+        var btns = options.map(function (opt) {
+            return '<button class="om-btn om-btn-outline om-owner-target" data-owner="' + esc(opt.key) + '" style="width:100%;justify-content:flex-start;margin-bottom:6px">' +
+                '<i class="fa-solid ' + (opt.key === 'user' ? 'fa-user' : 'fa-user-tag') + '"></i> ' + esc(opt.label) +
+                '</button>';
+        }).join('');
+        var sheet = createSheet([
+            '<div class="om-sheet-title om-settings-title">',
+            '<span><i class="fa-solid ' + (action === 'move' ? 'fa-arrow-right-arrow-left' : 'fa-copy') + '"></i>' + actionText + '穿搭</span>',
+            '<button class="om-sheet-close" id="om-owner-transfer-close" type="button" title="退出"><i class="fa-solid fa-xmark"></i>退出</button>',
+            '</div>',
+            '<div class="om-field"><label>来源</label><div class="om-storage-info">' + esc(sourceStore ? sourceStore.label : '当前衣柜') + ' · 已选 ' + selectedIds.length + ' 套</div></div>',
+            '<div class="om-field"><label>选择目标衣柜</label>' + btns + '</div>',
+            '<div class="om-hint">目标衣柜不会自动穿上这些衣服；' + (action === 'move' ? '来源当前穿着会清理被转移的旧衣服。' : '复制会生成新 ID，原衣柜保持不变。') + '</div>'
+        ].join(''));
+        sheet.querySelector('#om-owner-transfer-close').addEventListener('click', function () { closeSheet(sheet); });
+        sheet.querySelectorAll('.om-owner-target').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                performBatchOwnerMoveCopy(action, selectedIds, btn.dataset.owner, sheet);
+            });
+        });
+    }
+
     // ── 分类栏渲染 ────────────────────────────────────────────
     function renderCatbar() {
         var catbar = document.getElementById('om-catbar'); if (!catbar) return;
@@ -2215,7 +2535,7 @@
                     (o.description && o.description.toLowerCase().indexOf(q) !== -1);
             });
         }
-        var imgOutfits = list.filter(function (o) { return !!o.imageData; });
+        var imgOutfits = list.filter(function (o) { return hasOutfitImage(o); });
 
         var html = '';
 
@@ -2227,6 +2547,8 @@
                 '<div class="om-batch-acts">' +
                 '<button class="om-batch-btn" id="om-batch-selall">全选</button>' +
                 '<button class="om-batch-btn" id="om-batch-none">取消</button>' +
+                '<button class="om-batch-btn" id="om-batch-transfer"><i class="fa-solid fa-arrow-right-arrow-left"></i> 转移</button>' +
+                '<button class="om-batch-btn" id="om-batch-copy"><i class="fa-solid fa-copy"></i> 复制</button>' +
                 '<button class="om-batch-btn" id="om-batch-cat"><i class="fa-solid fa-folder"></i> 分类</button>' +
                 '<button class="om-batch-btn" id="om-batch-tag"><i class="fa-solid fa-tag"></i> 标签</button>' +
                 '<button class="om-batch-btn" id="om-batch-aidesc"><i class="fa-solid fa-wand-magic-sparkles"></i> AI描述</button>' +
@@ -2268,8 +2590,9 @@
                 var badge = (on && !batchMode) ? '<div class="om-badge-on"><i class="fa-solid fa-check"></i></div>' : '';
 
                 var imgContent = '';
-                if (o.imageData) {
-                    imgContent = '<img src="' + o.imageData + '" alt="' + esc(o.name) + '" />';
+                var imgSrc = resolveOutfitImage(o);
+                if (imgSrc) {
+                    imgContent = '<img src="' + esc(imgSrc) + '" alt="' + esc(o.name) + '" />';
                 } else {
                     var descPreview = (o.description && o.description.trim()) ? o.description.trim() : '';
                     imgContent = '<div class="om-card-noimg">' +
@@ -2281,7 +2604,7 @@
 
                 var menuBtn = batchMode ? '' : '<button class="om-card-menu" data-id="' + o.id + '" title="操作"><i class="fa-solid fa-ellipsis-vertical"></i></button>';
                 var tagText = (o.sceneTag && o.sceneTag.trim()) ? o.sceneTag.trim() : '';
-                html += '<div class="om-card' + (on ? ' on' : '') + (bsel ? ' batch-sel' : '') + (o.imageData ? '' : ' no-img') + '" data-id="' + o.id + '">' +
+                html += '<div class="om-card' + (on ? ' on' : '') + (bsel ? ' batch-sel' : '') + (imgSrc ? '' : ' no-img') + '" data-id="' + o.id + '">' +
                     '<div class="om-card-img">' +
                     checkBox + imgContent + badge + menuBtn +
                     '</div>' +
@@ -2308,9 +2631,19 @@
             var selnone = area.querySelector('#om-batch-none');
             var btagBtn = area.querySelector('#om-batch-tag');
             var bdelBtn = area.querySelector('#om-batch-del');
+            var btransferBtn = area.querySelector('#om-batch-transfer');
+            var bcopyBtn = area.querySelector('#om-batch-copy');
 
             if (selall) selall.addEventListener('click', function () { batchSelected = list.map(function (o) { return o.id; }); renderGrid(); });
             if (selnone) selnone.addEventListener('click', function () { batchSelected = []; renderGrid(); });
+            if (btransferBtn) btransferBtn.addEventListener('click', function () {
+                if (batchSelected.length === 0) { toast('请先选择穿搭', true); return; }
+                openBatchTransferCopySheet('move', batchSelected.slice());
+            });
+            if (bcopyBtn) bcopyBtn.addEventListener('click', function () {
+                if (batchSelected.length === 0) { toast('请先选择穿搭', true); return; }
+                openBatchTransferCopySheet('copy', batchSelected.slice());
+            });
             var bcatBtn = area.querySelector('#om-batch-cat');
             if (bcatBtn) bcatBtn.addEventListener('click', function () {
                 if (batchSelected.length === 0) { toast('请先选择穿搭', true); return; }
@@ -2390,7 +2723,7 @@
                 if (!dd.apiVision.endpoint || !dd.apiVision.key || !dd.apiVision.model) {
                     toast('请先在设置中配置"描述生成 API"', true); return;
                 }
-                var hasImg = batchSelected.some(function (id) { var o = getById(dd, id); return o && o.imageData; });
+                var hasImg = batchSelected.some(function (id) { var o = getById(dd, id); return o && hasOutfitImage(o); });
                 if (!hasImg) { toast('所选穿搭中没有带图片的', true); return; }
                 openBatchDescModal(batchSelected.slice());
             });
@@ -2753,24 +3086,29 @@ function renderQuickScenes(d) {
                     if (titleEl) titleEl.innerHTML = '<i class="fa-solid fa-shirt"></i> User · ' + esc(sc) + "\u642d\u914d\u7ed3\u679c";
                     var progEl = document.getElementById("om-roll-progress");
                     if (progEl) progEl.outerHTML = '<div style="max-height:360px;overflow-y:auto;margin-top:12px">' + bodyHtml + '</div>';
-                    function syncRollDescriptions() {
-                        var textareas = modal2.querySelectorAll(".om-roll-desc");
-                        textareas.forEach(function(ta) {
-                            var i = parseInt(ta.dataset.idx);
-                            if (i >= 0 && i < outfits.length) outfits[i].description = ta.value;
-                        });
-                    }
+                     function syncRollDescriptions() {
+                         var textareas = modal2.querySelectorAll(".om-roll-desc");
+                         textareas.forEach(function(ta) {
+                             var i = parseInt(ta.dataset.idx);
+                             if (i >= 0 && i < outfits.length) {
+                                 outfits[i].description = ta.value;
+                                 var normalized = normalizeOutfitForChatu8(outfits[i], sc);
+                                 outfits[i].name = normalized.name;
+                                 outfits[i].style = normalized.style;
+                                 outfits[i].sceneTag = normalized.sceneTag || sc;
+                             }
+                         });
+                     }
                     modal2.querySelectorAll(".om-roll-chatu8").forEach(function(chatu8Btn) {
                         chatu8Btn.addEventListener("click", function(e) {
                             e.stopPropagation();
-                            var idx = parseInt(chatu8Btn.dataset.idx);
-                            if (idx < 0 || idx >= outfits.length) return;
-                            syncRollDescriptions();
-                            var src = Object.assign({}, outfits[idx]);
-                            src.name = src.name || sc + "搭配";
-                            src.sceneTag = src.sceneTag || sc;
-                            generateChatu8ImageForOutfit(src, "User");
-                        });
+                             var idx = parseInt(chatu8Btn.dataset.idx);
+                             if (idx < 0 || idx >= outfits.length) return;
+                             syncRollDescriptions();
+                             var src = normalizeOutfitForChatu8(outfits[idx], sc);
+                             src.sceneTag = src.sceneTag || sc;
+                             generateChatu8ImageForOutfit(src, "User");
+                         });
                     });
                     // Add action buttons
                     var acts = document.getElementById("om-roll-actions");
@@ -2964,7 +3302,7 @@ function renderQuickScenes(d) {
                 modal.addEventListener('click', function(ev) { if (ev.target === modal) modal.remove(); });
                 modal.querySelector('#om-edit-save').addEventListener('click', function(e) {                     e.stopPropagation();                     var newDesc = modal.querySelector('#om-edit-desc').value;                     var dd2 = load(); var o2 = getById(dd2, id);                     if (o2) { o2.description = newDesc; save(dd2); }                     modal.remove();                     if (o2) { renderGrid(); renderBottomStatus(); updateBtn(); }                     toast('穿搭描述已更新');                 });
                 modal.querySelector('#om-edit-close').addEventListener('click', function(e) { e.stopPropagation(); modal.remove(); });
-                modal.querySelector('#om-edit-wardrobe').addEventListener('click', function(e) {                     e.stopPropagation();                     var newDesc = modal.querySelector('#om-edit-desc').value;                     var dd2 = load(); var o2 = getById(dd2, id);                     if (o2) {                         var saved = { id: genId(), name: o2.name, category: '世界书', type: 'outfit', style: o2.style || '', season: o2.season || '', sceneTag: o2.sceneTag || '', description: newDesc, imageData: o2.imageData || null, createdAt: Date.now() };                         dd2.outfits.push(saved);                         save(dd2); renderGrid(); updateBtn();                     }                     modal.remove(); toast('已保存到衣橱');                 });
+                modal.querySelector('#om-edit-wardrobe').addEventListener('click', function(e) {                     e.stopPropagation();                     var newDesc = modal.querySelector('#om-edit-desc').value;                     var dd2 = load(); var o2 = getById(dd2, id);                     if (o2) {                         var saved = { id: genId(), name: o2.name, category: '世界书', type: 'outfit', style: o2.style || '', season: o2.season || '', sceneTag: o2.sceneTag || '', description: newDesc, imageData: resolveOutfitImage(o2) || null, createdAt: Date.now() };                         dd2.outfits.push(saved);                         save(dd2); renderGrid(); updateBtn();                     }                     modal.remove(); toast('已保存到衣橱');                 });
             });
         });
         });
@@ -2999,10 +3337,10 @@ function renderQuickScenes(d) {
             isOn
                 ? '<div class="om-ctx-item" id="om-ctx-wear"><i class="fa-solid fa-circle-xmark"></i>取消选择</div>'
                 : '<div class="om-ctx-item" id="om-ctx-wear"><i class="fa-solid fa-circle-check"></i>选择穿搭</div>',
-            outfit.imageData ? '<div class="om-ctx-item" id="om-ctx-view"><i class="fa-solid fa-expand"></i>查看大图</div>' : '',
+            hasOutfitImage(outfit) ? '<div class="om-ctx-item" id="om-ctx-view"><i class="fa-solid fa-expand"></i>查看大图</div>' : '',
             '<div class="om-ctx-item" id="om-ctx-chatu8"><i class="fa-solid fa-palette"></i>智绘姬生图</div>',
             '<div class="om-ctx-item" id="om-ctx-edit"><i class="fa-solid fa-pen"></i>编辑</div>',
-            outfit.imageData ? '<div class="om-ctx-item" id="om-ctx-aidesc"><i class="fa-solid fa-wand-magic-sparkles"></i>AI 生成描述</div>' : '',
+            hasOutfitImage(outfit) ? '<div class="om-ctx-item" id="om-ctx-aidesc"><i class="fa-solid fa-wand-magic-sparkles"></i>AI 生成描述</div>' : '',
             '<div class="om-ctx-item danger" id="om-ctx-del"><i class="fa-solid fa-trash"></i>删除</div>',
         ].join(''));
 
@@ -3076,16 +3414,16 @@ function renderQuickScenes(d) {
 
     function batchParseItems(outfitIds, prompt, progressCb, doneCb) {
         var d = load(); var apiCfg = d.apiVision; if (!apiCfg.endpoint || !apiCfg.key || !apiCfg.model) { doneCb('API 未配置'); return; }
-        var targets = []; outfitIds.forEach(function (id) { var o = getById(d, id); if (!o || !o.imageData) return; targets.push(o); });
+        var targets = []; outfitIds.forEach(function (id) { var o = getById(d, id); if (!o || !hasOutfitImage(o)) return; targets.push(o); });
         if (targets.length === 0) { doneCb('没有需要解析的穿搭'); return; }
         var done = 0; var total = targets.length; var errors = []; var queue = targets.slice();
         var CONCURRENCY = 2;
-        function processNext() { if (queue.length === 0) return; var o = queue.shift(); callVisionAPI(apiCfg, { name: o.name, dataUrl: o.imageData }, prompt, function (err, text) { done++; if (err) errors.push({ name: o.name, error: err }); else if (text) o.description = text; else errors.push({ name: o.name, error: '返回为空' }); progressCb(done, total, '已完成 ' + done + '/' + total); if (done >= total) { save(d); doneCb(errors.length > 0 ? '完成，但有 ' + errors.length + ' 个错误' : null, done, errors); } else processNext(); }); }
+        function processNext() { if (queue.length === 0) return; var o = queue.shift(); callVisionAPI(apiCfg, { name: o.name, dataUrl: resolveOutfitImage(o) }, prompt, function (err, text) { done++; if (err) errors.push({ name: o.name, error: err }); else if (text) o.description = text; else errors.push({ name: o.name, error: '返回为空' }); progressCb(done, total, '已完成 ' + done + '/' + total); if (done >= total) { save(d); doneCb(errors.length > 0 ? '完成，但有 ' + errors.length + ' 个错误' : null, done, errors); } else processNext(); }); }
         progressCb(0, total, '开始（并发' + CONCURRENCY + '）'); for (var i = 0; i < Math.min(CONCURRENCY, total); i++) processNext();
     }
 
     function openBatchParseModal(ids) {
-        var d = load(); var withImg = ids.filter(function (id) { var o = getById(d, id); return o && o.imageData; });
+        var d = load(); var withImg = ids.filter(function (id) { var o = getById(d, id); return o && hasOutfitImage(o); });
         if (withImg.length === 0) { toast('所选穿搭中没有带图片的', true); return; }
         var bg = darkMode ? '#1e1e24' : '#ececef'; var fg = darkMode ? '#eee' : '#111';
         var modal = document.createElement('div'); modal.className = 'om-modal';
@@ -3100,16 +3438,16 @@ function renderQuickScenes(d) {
 
     function batchAutoTagItems(outfitIds, prompt, progressCb, doneCb) {
         var d = load(); var apiCfg = d.apiVision; if (!apiCfg.endpoint || !apiCfg.key || !apiCfg.model) { doneCb('API 未配置'); return; }
-        var targets = []; outfitIds.forEach(function (id) { var o = getById(d, id); if (!o || !o.imageData) return; targets.push(o); });
+        var targets = []; outfitIds.forEach(function (id) { var o = getById(d, id); if (!o || !hasOutfitImage(o)) return; targets.push(o); });
         if (targets.length === 0) { doneCb('没有需要识别的穿搭'); return; }
         var done = 0; var total = targets.length; var errors = []; var queue = targets.slice();
         var ITEM_DELAY = 800;
-        function processNext() { if (queue.length === 0) return; var o = queue.shift(); callVisionAPI(apiCfg, { name: o.name, dataUrl: o.imageData }, prompt, function (err, text) { done++; if (err) { errors.push({ name: o.name, error: err }); } else if (text) { var parsed = parseAutoTagResult(text); if (parsed.name) o.name = parsed.name; if (parsed.type) o.type = parsed.type; if (parsed.style) o.style = parsed.style; if (parsed.season) o.season = parsed.season; if (parsed.scene) o.sceneTag = parsed.scene; if (parsed.description) o.description = parsed.description; if (!parsed.name && !parsed.style && !parsed.season && !parsed.scene) { o.description = text; } } else { errors.push({ name: o.name, error: '返回为空' }); } progressCb(done, total, '已完成 ' + done + '/' + total + (errors.length > 0 ? ' (' + errors.length + '失败)' : '')); if (done >= total) { save(d); doneCb(errors.length > 0 ? '完成，但有 ' + errors.length + ' 个错误' : null, done, errors); } else { setTimeout(processNext, ITEM_DELAY); } }); }
+        function processNext() { if (queue.length === 0) return; var o = queue.shift(); callVisionAPI(apiCfg, { name: o.name, dataUrl: resolveOutfitImage(o) }, prompt, function (err, text) { done++; if (err) { errors.push({ name: o.name, error: err }); } else if (text) { var parsed = parseAutoTagResult(text); if (parsed.name) o.name = parsed.name; if (parsed.type) o.type = parsed.type; if (parsed.style) o.style = parsed.style; if (parsed.season) o.season = parsed.season; if (parsed.scene) o.sceneTag = parsed.scene; if (parsed.description) o.description = parsed.description; if (!parsed.name && !parsed.style && !parsed.season && !parsed.scene) { o.description = text; } } else { errors.push({ name: o.name, error: '返回为空' }); } progressCb(done, total, '已完成 ' + done + '/' + total + (errors.length > 0 ? ' (' + errors.length + '失败)' : '')); if (done >= total) { save(d); doneCb(errors.length > 0 ? '完成，但有 ' + errors.length + ' 个错误' : null, done, errors); } else { setTimeout(processNext, ITEM_DELAY); } }); }
         progressCb(0, total, '开始处理 ' + total + ' 套（遇限速自动重试）'); processNext();
     }
 
     function openBatchAutoTagModal(ids) {
-        var d = load(); var withImg = ids.filter(function (id) { var o = getById(d, id); return o && o.imageData; });
+        var d = load(); var withImg = ids.filter(function (id) { var o = getById(d, id); return o && hasOutfitImage(o); });
         if (withImg.length === 0) { toast('所选穿搭中没有带图片的', true); return; }
         var bg = darkMode ? '#1e1e24' : '#ececef'; var fg = darkMode ? '#eee' : '#111';
         var modal = document.createElement('div'); modal.className = 'om-modal';
@@ -3125,8 +3463,9 @@ function renderQuickScenes(d) {
     function generateSingleParse(outfit, parsePrompt, cb) {
         var d = load(); var apiCfg = d.apiVision;
         if (!apiCfg.endpoint || !apiCfg.key || !apiCfg.model) { cb('API 未配置'); return; }
-        if (!outfit.imageData) { cb('没有图片'); return; }
-        callVisionAPI(apiCfg, { name: outfit.name, dataUrl: outfit.imageData }, parsePrompt, function (err, text) { if (err) { cb(err); return; } cb(null, text); });
+        var img = resolveOutfitImage(outfit);
+        if (!img) { cb('没有图片'); return; }
+        callVisionAPI(apiCfg, { name: outfit.name, dataUrl: img }, parsePrompt, function (err, text) { if (err) { cb(err); return; } cb(null, text); });
     }
 
 
@@ -3473,7 +3812,8 @@ function renderQuickScenes(d) {
                 h += '<div style="font-weight:600;margin-bottom:8px">套装</div>';
                 r.outfits.forEach(function (o) {
                     h += '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:12px;padding:8px;background:rgba(127,127,127,.06);border-radius:8px">';
-                    if (o.imageData) h += '<img src="' + o.imageData + '" style="width:80px;height:106px;object-fit:cover;border-radius:6px;flex-shrink:0" />';
+                    var oImg = resolveOutfitImage(o);
+                    if (oImg) h += '<img src="' + esc(oImg) + '" style="width:80px;height:106px;object-fit:cover;border-radius:6px;flex-shrink:0" />';
                     h += '<div style="min-width:0"><div style="font-weight:600;margin-bottom:2px">' + esc(o.name) + '</div>';
                     if (o.style) h += '<div style="font-size:.8em;opacity:.7">风格：' + esc(o.style) + '</div>';
                     if (o.season) h += '<div style="font-size:.8em;opacity:.7">季节：' + esc(o.season) + '</div>';
@@ -3486,7 +3826,8 @@ function renderQuickScenes(d) {
                 h += '<div style="font-weight:600;margin:8px 0">单品</div>';
                 r.items.forEach(function (o) {
                     h += '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:8px;padding:6px 8px;background:rgba(127,127,127,.04);border-radius:6px">';
-                    if (o.imageData) h += '<img src="' + o.imageData + '" style="width:60px;height:80px;object-fit:cover;border-radius:4px;flex-shrink:0" />';
+                    var oImg2 = resolveOutfitImage(o);
+                    if (oImg2) h += '<img src="' + esc(oImg2) + '" style="width:60px;height:80px;object-fit:cover;border-radius:4px;flex-shrink:0" />';
                     h += '<div><span style="font-size:.75em;opacity:.5">' + esc(o.category || '其他') + '</span><br>' + esc(o.name) + '</div>';
                     if (o.description) h += '<div style="font-size:.75em;opacity:.7;margin-top:2px;line-height:1.4">' + esc(o.description) + '</div>';
                     h += '</div></div>';
@@ -3506,7 +3847,7 @@ function renderQuickScenes(d) {
 
     function openEditSheet(outfit, defaultCat) {
         var d = load();
-        var editImgData = outfit ? (outfit.imageData || null) : null;
+        var editImgData = outfit ? (resolveOutfitImage(outfit) || null) : null;
         var viewCats = getViewCategories(d);
         var catOpts = '<option value="">无分类</option>' +
             viewCats.map(function (c) { return '<option value="' + esc(c) + '"' + (outfit && outfit.category === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
@@ -3763,7 +4104,8 @@ function renderQuickScenes(d) {
     // ── 设置 Bottom Sheet ─────────────────────────────────────
     function openSettingsSheet() {
         var d = load();
-        var imgCount = d.outfits.filter(function (o) { return !!o.imageData; }).length;
+        var outfitCount = countAllOutfits(d);
+        var imgCount = countAllOutfitImages(d);
 
         var sheet = createSheet([
             '<div class="om-sheet-title om-settings-title">' +
@@ -3829,7 +4171,7 @@ function renderQuickScenes(d) {
 
             '<div class="om-divider"></div>',
             '<div class="om-sec-title">数据</div>',
-            '<div class="om-storage-info">' + d.outfits.length + ' 套穿搭 / ' + imgCount + ' 张图片 / ' + (d.presets ? d.presets.length : 0) + ' 个预设 | 酒馆共享存储</div>',
+            '<div class="om-storage-info">' + outfitCount + ' 套穿搭 / ' + imgCount + ' 张图片 / ' + (d.presets ? d.presets.length : 0) + ' 个预设 | 酒馆共享存储</div>',
             '<div class="om-btn-row" style="margin-top:8px">',
             '<button class="om-btn om-btn-outline" id="om-exp"><i class="fa-solid fa-download"></i> 导出</button>',
             '<button class="om-btn om-btn-outline" id="om-imp"><i class="fa-solid fa-upload"></i> 导入</button>',
@@ -3894,8 +4236,14 @@ function renderQuickScenes(d) {
             if (dd.showBall) injectFab();
         });
         sheet.querySelector('#om-debug').addEventListener('change', function () { var dd = load(); dd.debug = this.checked; save(dd); });
-        sheet.querySelector('#om-exp').addEventListener('click', exportData);
-        sheet.querySelector('#om-imp').addEventListener('click', importData);
+        sheet.querySelector('#om-exp').addEventListener('click', function () {
+            closeSheet(sheet);
+            setTimeout(exportData, 0);
+        });
+        sheet.querySelector('#om-imp').addEventListener('click', function () {
+            closeSheet(sheet);
+            setTimeout(importData, 0);
+        });
         sheet.querySelector('#om-clear').addEventListener('click', function () {
             var dd = load();
             var label = dd.currentView === 'char' && dd.currentChar ? '「' + dd.currentChar + '」的穿搭' : 'User 的穿搭';
@@ -3995,11 +4343,12 @@ function renderQuickScenes(d) {
 
         function render() {
             var o = outfits[idx];
+            var img = resolveOutfitImage(o);
             lb.innerHTML =
                 '<button class="om-lb-close" id="om-lb-close"><i class="fa-solid fa-xmark"></i></button>' +
                 '<div class="om-lb-name">' + esc(o.name) + '</div>' +
                 (outfits.length > 1 ? '<button class="om-lb-nav om-lb-prev" id="om-lb-prev"><i class="fa-solid fa-chevron-left"></i></button>' : '') +
-                '<img class="om-lb-img" src="' + o.imageData + '" draggable="false" />' +
+                '<img class="om-lb-img" src="' + esc(img) + '" draggable="false" />' +
                 (outfits.length > 1 ? '<button class="om-lb-nav om-lb-next" id="om-lb-next"><i class="fa-solid fa-chevron-right"></i></button>' : '') +
                 (outfits.length > 1 ? '<div class="om-lb-counter">' + (idx + 1) + ' / ' + outfits.length + '</div>' : '');
             lb.querySelector('#om-lb-close').addEventListener('click', closeLb);
@@ -4055,7 +4404,7 @@ function renderQuickScenes(d) {
             charBtns +
             '<button class="om-modal-cancel" id="om-exp-cancel">取消</button></div>';
         var _mp = getPopupLayer();
-        modal.style.cssText = 'position:absolute !important;inset:0 !important;z-index:1 !important;background:rgba(0,0,0,.45) !important;display:flex !important;align-items:center !important;justify-content:center !important;padding:20px !important;box-sizing:border-box !important;pointer-events:auto !important;';
+        modal.style.cssText = 'position:absolute !important;inset:0 !important;z-index:2147483647 !important;background:rgba(0,0,0,.45) !important;display:flex !important;align-items:center !important;justify-content:center !important;padding:20px !important;box-sizing:border-box !important;pointer-events:auto !important;';
         _mp.appendChild(modal);
         modal.addEventListener('click', function (e) { if (e.target === modal) _mp.removeChild(modal); });
         modal.querySelector('#om-exp-cancel').addEventListener('click', function () { _mp.removeChild(modal); });
@@ -4111,7 +4460,7 @@ function renderQuickScenes(d) {
             '<input type="file" id="om-imp-file" accept=".json" style="display:none" />' +
             '<button class="om-modal-cancel" id="om-imp-cancel">取消</button></div>';
         var _mp2 = getPopupLayer();
-        modal.style.cssText = 'position:absolute !important;inset:0 !important;z-index:1 !important;background:rgba(0,0,0,.45) !important;display:flex !important;align-items:center !important;justify-content:center !important;padding:20px !important;box-sizing:border-box !important;pointer-events:auto !important;';
+        modal.style.cssText = 'position:absolute !important;inset:0 !important;z-index:2147483647 !important;background:rgba(0,0,0,.45) !important;display:flex !important;align-items:center !important;justify-content:center !important;padding:20px !important;box-sizing:border-box !important;pointer-events:auto !important;';
         _mp2.appendChild(modal);
         modal.addEventListener('click', function (e) { if (e.target === modal) _mp2.removeChild(modal); });
         modal.querySelector('#om-imp-cancel').addEventListener('click', function () { _mp2.removeChild(modal); });
@@ -4412,7 +4761,7 @@ function renderQuickScenes(d) {
     // ── 批量 AI 生成描述弹窗 ──────────────────────────────────
     function openBatchDescModal(ids) {
         var d = load();
-        var withImg = ids.filter(function (id) { var o = getById(d, id); return o && o.imageData; });
+        var withImg = ids.filter(function (id) { var o = getById(d, id); return o && hasOutfitImage(o); });
         var skipCount = ids.length - withImg.length;
         var willSkipDesc = withImg.filter(function (id) { var o = getById(d, id); return o && o.description && o.description.trim() && !d.apiVision.overwrite; }).length;
 
@@ -4616,7 +4965,7 @@ function renderQuickScenes(d) {
         var targets = [];
         outfitIds.forEach(function (id) {
             var o = getById(d, id);
-            if (!o || !o.imageData) return;
+            if (!o || !hasOutfitImage(o)) return;
             if (!apiCfg.overwrite && o.description && o.description.trim()) return;
             targets.push(o);
         });
@@ -4629,7 +4978,7 @@ function renderQuickScenes(d) {
         function processNext() {
             if (queue.length === 0) return;
             var o = queue.shift();
-            var image = { name: o.name, dataUrl: o.imageData };
+            var image = { name: o.name, dataUrl: resolveOutfitImage(o) };
             callVisionAPI(apiCfg, image, apiCfg.prompt, function (err, text) {
                 done++;
                 if (err) {
@@ -4661,8 +5010,9 @@ function renderQuickScenes(d) {
         var d = load();
         var apiCfg = d.apiVision;
         if (!apiCfg.endpoint || !apiCfg.key || !apiCfg.model) { cb('请先在设置中配置"描述生成 API"'); return; }
-        if (!outfit.imageData) { cb('该穿搭没有图片'); return; }
-        callVisionAPI(apiCfg, { name: outfit.name, dataUrl: outfit.imageData }, apiCfg.prompt, function (err, text) {
+        var img = resolveOutfitImage(outfit);
+        if (!img) { cb('该穿搭没有图片'); return; }
+        callVisionAPI(apiCfg, { name: outfit.name, dataUrl: img }, apiCfg.prompt, function (err, text) {
             if (err) { cb(err); return; }
             cb(null, text);
         });
@@ -4750,13 +5100,13 @@ function renderQuickScenes(d) {
                         c.push({ type: 'text', text: '\n[' + grp.name + '的可选穿搭 - 共' + grp.outfits.length + '套]' });
                         grp.outfits.forEach(function (o, i) {
                             c.push({ type: 'text', text: '\n(' + (i + 1) + ') ' + o.name + (o.sceneTag ? ' [场景：' + o.sceneTag + ']' : '') + '：' });
-                            c.push({ type: 'image_url', image_url: { url: o.imageData } });
+                            c.push({ type: 'image_url', image_url: { url: resolveOutfitImage(o) } });
                         });
                     } else {
                         // 单套
                         var o = grp.outfits[0];
                         c.push({ type: 'text', text: '\n[' + grp.name + '当前穿着]' });
-                        c.push({ type: 'image_url', image_url: { url: o.imageData } });
+                        c.push({ type: 'image_url', image_url: { url: resolveOutfitImage(o) } });
                     }
                 });
 
@@ -4792,51 +5142,6 @@ function renderQuickScenes(d) {
         };
     }
 
-    // ★ 剔除世界书穿搭条目（避免OM穿搭与世界书条目重复/冲突）
-    function stripWorldBookEntries(p) {
-        var removed = 0;
-        var explicitRe = /<[^>]*?(?:穿搭|睡衣|随机穿搭|内衣|Cosplay)[^>]*?>[\s\S]*?<\/[^>]*?(?:穿搭|睡衣|随机穿搭|内衣|Cosplay)[^>]*?>/g;
-        var xmlBlockRe = /<([^>\n]{1,80})>[\s\S]*?<\/\1>/g;
-        function looksLikeOutfitWorldBookBlock(block) {
-            return /(?:穿搭|睡衣|内衣|Cosplay|核心风格|生成规则|定义\s*[：:]|单品\s*[：:]|配色\s*[：:]|妆容搭配\s*[：:]|可选配饰\s*[：:]|可选鞋履\s*[：:]|搭配技巧\s*[：:]|搭配示例\s*[：:]|上衣\s*[：:]|下装\s*[：:]|裙装\s*[：:]|连衣裙\s*[：:]|配饰\s*[：:]|鞋袜\s*[：:])/.test(block || '');
-        }
-        function stripText(text) {
-            if (typeof text !== 'string' || !text) return text;
-            var before = text;
-            text = text.replace(explicitRe, function () { removed++; return ''; });
-            text = text.replace(xmlBlockRe, function (block) {
-                if (!looksLikeOutfitWorldBookBlock(block)) return block;
-                removed++;
-                return '';
-            });
-            if (text !== before) text = text.replace(/\n{3,}/g, '\n\n');
-            return text;
-        }
-        // 处理 messages 格式
-        if (p.messages && Array.isArray(p.messages)) {
-            for (var si = 0; si < p.messages.length; si++) {
-                var c = p.messages[si].content;
-                if (typeof c === 'string') {
-                    p.messages[si].content = stripText(c);
-                } else if (Array.isArray(c)) {
-                    for (var bi = 0; bi < c.length; bi++) {
-                        if (c[bi].type === 'text' && typeof c[bi].text === 'string') {
-                            c[bi].text = stripText(c[bi].text);
-                        }
-                    }
-                }
-            }
-        }
-        // 处理 prompt 格式（旧版/长上下文可能用）
-        if (typeof p.prompt === 'string') {
-            p.prompt = stripText(p.prompt);
-        }
-        return removed;
-    }
-
-
-
-
     function tryInjectBody(bodyStr) {
         var p; try { p = JSON.parse(bodyStr); } catch (e) { return null; }
         if (!p || (!p.messages && p.prompt === undefined)) return null;
@@ -4844,8 +5149,6 @@ function renderQuickScenes(d) {
         var pos = d.injectPosition || 'user';
         var useImg = (d.mode === 'image' || d.mode === 'both');
         var useText = (d.mode === 'text' || d.mode === 'both');
-        // OM启用后，普通聊天请求不发送uu/SFW这类穿搭世界书候选条目；OM自己的场景生成会单独读取世界书。
-        var strippedWorldBookCount = stripWorldBookEntries(p);
 
         // 收集所有owner及其激活穿搭
         var owners = [];
@@ -4863,7 +5166,7 @@ function renderQuickScenes(d) {
             }
         }
 
-        if (owners.length === 0) return strippedWorldBookCount > 0 ? JSON.stringify(p) : null;
+        if (owners.length === 0) return null;
 
 
         // ★ v19核心改动：先收集所有文本和图片，合并成一条再注入
@@ -4888,7 +5191,7 @@ function renderQuickScenes(d) {
                     allTextParts.push(wt);
                 }
                 if (useImg) {
-                    var imgOutfits = active.filter(function (o) { return !!o.imageData; });
+                    var imgOutfits = active.filter(function (o) { return hasOutfitImage(o); });
                     if (imgOutfits.length > 0) ownerImageGroups.push({ name: ow.name, outfits: imgOutfits, isMulti: true });
                 }
             } else {
@@ -4900,7 +5203,7 @@ function renderQuickScenes(d) {
                         .replace('{{description}}', desc2);
                     allTextParts.push(st);
                 }
-                if (useImg && o.imageData) { ownerImageGroups.push({ name: ow.name, outfits: [o], isMulti: false }); }
+                if (useImg && hasOutfitImage(o)) { ownerImageGroups.push({ name: ow.name, outfits: [o], isMulti: false }); }
             }
         });
 
@@ -4913,7 +5216,7 @@ function renderQuickScenes(d) {
                 mergedText = allTextParts[0];
             } else {
                 // 多个owner时加总包裹
-                mergedText = '=== 当前场景服装信息（必须严格遵守，不可自行编造服装）===\n\n' + allTextParts.join('\n\n---\n\n') + '\n\n=== 服装信息结束 ===';
+                mergedText = '=== 当前服装状态参考 ===\n\n' + allTextParts.join('\n\n---\n\n') + '\n\n=== 服装状态参考结束 ===';
             }
             injectText(p, mergedText, pos);
             injected = true;
@@ -5025,6 +5328,9 @@ function renderQuickScenes(d) {
         }
         finishStartup();
         updateBtn();
+        if (startupWorldBooks.length > 0) {
+            setTimeout(function () { refreshWorldBookStyles(startupWorldBooks); }, 0);
+        }
     });
 
 })();

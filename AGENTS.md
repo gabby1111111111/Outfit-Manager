@@ -101,6 +101,12 @@ virtualOutfits = temporary generated outfit, not necessarily saved
 activeIds      = current outfit state, the part sent to AI
 ```
 
+Batch transfer/copy between User and character wardrobes should operate only on
+saved outfits, not `virtualOutfits`. Copy creates new ids and leaves source
+`activeIds` unchanged; transfer creates new target ids, removes originals from
+the source, and clears matching source `activeIds`. The target wardrobe should
+not auto-wear transferred/copied outfits.
+
 ## Storage
 
 The plugin stores data in several places:
@@ -130,6 +136,8 @@ UI-only layout state, such as the PC floating ball position and popup size, is l
 Import/restore flows can be followed immediately by refreshes or browser switches. After importing wardrobes, especially character-only wardrobes, force a shared settings save (`save(..., { forceShared: true })`) instead of relying only on debounced settings persistence.
 
 Mobile full-screen UI must respect iOS safe areas. Keep top actions such as the main close button inside `env(safe-area-inset-top)` padding, and do not apply that padding to the PC windowed layout.
+
+Do not autofocus large textareas when opening bottom sheets. On mobile and some ST layouts it can move the viewport/keyboard and make the whole panel visibly jump.
 
 ## UI Overview
 
@@ -363,7 +371,8 @@ Use `ctx.generateRaw`, not `generateQuietPrompt`. `generateQuietPrompt` previous
 
 Scene result actions can call the Chatu8 image bridge from the generated text.
 Before sending, sync the editable `.om-roll-desc` textarea back into the outfit
-object, then use the existing Chatu8 preview-first save flow.
+object, derive `name` / `style` from the edited description's first style line
+when applicable, then use the existing Chatu8 preview-first save flow.
 
 ## Prompt Injection Into Normal Chat
 
@@ -397,7 +406,7 @@ tryInjectBody(bodyStr)
 2. load current Outfit Manager data
 3. collect User activeIds
 4. collect Char activeIds
-5. strip world-book outfit entries from the prompt
+5. return without changes if no active outfits exist
 6. build outfit text templates
 7. inject text into user/context/system position
 8. inject images if mode is image/both
@@ -406,22 +415,23 @@ tryInjectBody(bodyStr)
 
 This is why `activeIds` is the current-clothing source of truth.
 
-## Why Strip World Book Entries?
+## World Books And Normal Chat
 
-If an outfit is already active, the model should see the final outfit, not all candidate world-book outfit guides.
+OM should not strip or parse XML/world-book text from outgoing chat requests.
+Users should import OM style world books for OM to read directly, but should not
+enable those books globally in SillyTavern. Then normal chat prompts contain
+only the current active outfit injection, not the full style books.
 
-`stripWorldBookEntries(p)` removes world-book outfit blocks from outgoing prompts to avoid conflict:
+If no active outfit exists, `tryInjectBody()` must return `null` and leave the
+request unchanged. If any active User or character outfit exists, OM injects it
+without judging the current preset, world book, or plugin prompt type. Do not add
+preset-specific skip logic, prompt-builder detection, or request-layer XML
+cleanup.
 
-```text
-bad:
-current outfit says 财阀千金风
-world book also sends 30 candidate outfits
-model mixes them
-
-good:
-current outfit only
-model stays consistent
-```
+Default injection templates should be plain state blocks: title plus outfit
+content only. Do not add explanation lines such as "continuity reference",
+"no need to describe clothes every turn", "must mention clothing", or repeated
+strict clothing narration rules.
 
 ## Image Features
 
@@ -439,6 +449,11 @@ These are separate from scene AI generation.
 
 Scene generation uses `ctx.generateRaw`.
 Image analysis uses OpenAI-compatible `chat/completions` with image content.
+
+Read outfit images through `resolveOutfitImage(outfit)` / `hasOutfitImage()`,
+not by checking `outfit.imageData` directly. `imageData` is the current legacy
+inline/base64 field; future server-cached images should use lightweight
+references such as `imageRef` / `imageUrl` while old data keeps working.
 
 ## External Frontend / Chatu8 Bridge
 
@@ -479,6 +494,17 @@ Response payload includes:
 and only write it into wardrobe data after explicit user confirmation, because
 base64 images can bloat shared settings.
 
+Before emitting `generate-image-request`, show the full Chatu8 prompt in an
+editable confirmation sheet. Send to Chatu8 only after the user confirms, and
+pass the edited prompt through to the generated-image preview/save sheet.
+
+OM's default Chatu8 prompt is for pure outfit display / wardrobe cover images,
+not story illustrations. Keep it short, centered on clothing shape, color,
+material, layering, and accessories. Without a reliable appearance reference,
+default to a no-face / neck-down composition. Prefer close outfit framing from
+neck/chin below to above the knees or mid-thigh, with the model and clothing
+filling most of the image and a natural professional fashion pose.
+
 When st-chatu8 also inserts its generated chat image into the page, that image
 can use a max z-index and cover OM sheets. Before opening OM preview/save sheets,
 keep `.om-overlay` at `2147483647` and re-append it to the end of `body` so the
@@ -497,6 +523,21 @@ response ch-char-data-import-response
 Use this only for explicit OM -> 智绘姬 export/import workflows. It supports
 `mode: "text"` with `<人物>` / `<服装>` blocks and `mode: "structured"` with
 `data.characters` / `data.outfits`. `nameCN` is required by 智绘姬.
+
+智绘姬 "陪玩" is a composed workflow, not one OM-facing API. Relevant UI files:
+
+```text
+settings.html                         智绘姬AI panel: API, preset role, ASR/TTS
+html/settings/llm.html                LLM presets; 智绘姬助手 uses this when preset role is 自定义 (LLM预设)
+html/settings/knowledgeBase.html      资料库, 人设管理, user管理, persona/user injection
+html/settings/character.html          角色设定, 服装管理, 角色启用列表
+html/settings/fab.html                悬浮球, 视频形象, 独立窗口
+```
+
+For OM integration, prefer focused bridges: send outfit text/images to 生图 or
+export OM outfits into 智绘姬 服装管理. Do not try to control the whole 陪玩 flow
+unless the feature explicitly needs persona/user injection, voice, or screen
+sharing.
 
 ## Common Change Requests
 
@@ -591,6 +632,12 @@ id="om-wardrobe-random"
 applyRandomWardrobeOutfit()
 ```
 
+### Open modal actions from settings
+
+When a settings sheet button opens another modal flow, such as export/import,
+close the settings sheet first or give the modal a higher layer than
+`.om-sheet-overlay`; otherwise the new modal can appear behind the sheet.
+
 ### Change scene buttons
 
 Edit `sceneDefs` inside `renderQuickScenes()`.
@@ -605,11 +652,13 @@ Edit `tryGenerateAIDescription(scene, callback)`.
 
 ### Change outgoing chat injection
 
-Edit `tryInjectBody()`, `injectText()`, `stripWorldBookEntries()`, or the default templates in `def()`.
+Edit `tryInjectBody()`, `injectText()`, or the default templates in `def()`.
 
 ### Fix repeated or unwanted world-book text in actual API requests
 
-Start at `stripWorldBookEntries(p)` and `tryInjectBody(bodyStr)`.
+Do not fix this by stripping XML in OM. Ask the user to import OM style world
+books without enabling them globally, then check `tryInjectBody(bodyStr)` only
+for active outfit injection behavior.
 
 ### Fix model output leaking RP status blocks
 
@@ -660,6 +709,20 @@ Some pushes may show a PowerShell `RemoteException` while still succeeding. Conf
 ## Local Notes
 
 Private/local context. Do not generalize to public docs.
+
+On this machine, SillyTavern world books are stored at:
+
+```text
+E:\SillyTaven\SillyTavern\data\default-user\worlds
+```
+
+Local text-to-image world books to inspect before improving OM -> 智绘姬 prompts:
+
+```text
+电影大师初心2.0第一视角进阶版 (1).json
+新版通用角色变量世界书(2).json
+Grok文生图提示词.json
+```
 
 On this machine, JS-Slash-Runner / Tavern Helper is installed at:
 
