@@ -477,8 +477,17 @@ records; never repair by fuzzy name matching alone.
 The built-in migration entry lives under Settings -> Data and scans User,
 character, preset, and persisted `virtualOutfits` records. Its runtime evidence
 is exposed at `window.__outfitManagerAudit.image_migration`. It checkpoints
-without repeatedly rewriting the localStorage backup, and performs one final
-awaited shared-settings save plus browser backup write when stopped or finished.
+without repeatedly rewriting the localStorage backup, performs an awaited shared
+settings save whenever stopped, and writes the browser backup only after all
+legacy images are migrated and the data is lightweight.
+
+On phones and low-memory devices, migration must run in small bounded batches
+(currently 5 images), force-save shared settings, then pause and ask the user to
+refresh before continuing. Do not clone the still-large wardrobe into IndexedDB
+or localStorage at intermediate checkpoints, do not trigger a full shared save
+after every image, and do not download the complete uploaded image merely to
+verify it. These operations can temporarily duplicate hundreds of MiB and cause
+Android/iOS to kill the local SillyTavern process or WebView.
 
 After migration, old SillyTavern settings backups still contain the earlier
 large inline wardrobe and do not shrink automatically. OM may summarize
