@@ -29,6 +29,22 @@
     var persistentLoadComplete = false;
     var darkMode = false; // 默认浅色
     var popupResizeHandler = null;
+    var imageMigrationRun = null;
+    var dataMaidSafetyObserver = null;
+
+    function getOutfitManagerAudit() {
+        if (typeof window === 'undefined') return null;
+        if (!window.__outfitManagerAudit) {
+            window.__outfitManagerAudit = {
+                run_id: 0,
+                image_migration: { status: 'idle', total: 0, processed: 0, migrated: 0, failed: 0, remaining: 0, error: null },
+                backup_cleanup: { status: 'idle', count: 0, total_bytes: 0, native_tool_available: false, delete_all_hidden: false, clear_size_split: false, keep_count: 0, recommended_delete_count: 0, recommended_delete_bytes: 0, error: null },
+                backup_cleanup_delete: { status: 'idle', deleted_count: 0, deleted_bytes: 0, error: null },
+                last_error: null
+            };
+        }
+        return window.__outfitManagerAudit;
+    }
 
     function getViewportSize() {
         return {
@@ -302,12 +318,19 @@
         dataCache = d;
         persistentLoadComplete = true;
         d.updatedAt = Date.now();
-        saveToSharedSettings(d, !!opts.forceShared);
+        if (!opts.skipShared) saveToSharedSettings(d, !!opts.forceShared);
         openDB(function (db) {
-            if (!db) { try { localStorage.setItem('outfit_mgr_v4', JSON.stringify(d)); } catch (e) {} if (cb) cb(); return; }
+            if (!db) {
+                if (!opts.skipLocalBackup) { try { localStorage.setItem('outfit_mgr_v4', JSON.stringify(d)); } catch (e) {} }
+                if (cb) cb();
+                return;
+            }
             var tx = db.transaction(STORE_NAME, 'readwrite');
             tx.objectStore(STORE_NAME).put(d, DATA_KEY);
-            tx.oncomplete = function () { try { localStorage.setItem('outfit_mgr_v4_backup', JSON.stringify(d)); } catch (e) {} if (cb) cb(); };
+            tx.oncomplete = function () {
+                if (!opts.skipLocalBackup) { try { localStorage.setItem('outfit_mgr_v4_backup', JSON.stringify(d)); } catch (e) {} }
+                if (cb) cb();
+            };
             tx.onerror = function () { if (cb) cb(); };
         });
     }
@@ -593,6 +616,836 @@
 
     function hasOutfitImage(o) {
         return !!resolveOutfitImage(o);
+    }
+
+    function isImageDataUrl(value) {
+        return /^data:image\/[a-z0-9.+-]+;base64,/i.test(String(value || ''));
+    }
+
+    function isInjectableImageValue(value) {
+        var s = String(value || '');
+        return isImageDataUrl(s) || /^https?:\/\//i.test(s);
+    }
+
+    function hasInjectableOutfitImage(o) {
+        return isInjectableImageValue(resolveOutfitImage(o));
+    }
+
+    function getImageDataParts(dataUrl) {
+        var s = String(dataUrl || '');
+        var m = s.match(/^data:image\/([a-z0-9.+-]+);base64,([\s\S]+)$/i);
+        if (!m) return null;
+        var ext = (m[1] || 'png').toLowerCase();
+        if (ext === 'jpeg') ext = 'jpg';
+        if (ext === 'svg+xml') ext = 'svg';
+        return { format: ext, base64: m[2] || '' };
+    }
+
+    function assetNamePart(value) {
+        return String(value || '')
+            .replace(/[\\/:*?"<>|#%&{}$!'@+`=]/g, '_')
+            .replace(/\s+/g, '_')
+            .slice(0, 40) || 'outfit';
+    }
+
+    function saveOutfitImageAsset(imageData, meta, cb) {
+        var parts = getImageDataParts(imageData);
+        if (!parts || !parts.base64) {
+            cb(null, imageData ? { imageRef: imageData, imageUrl: imageData } : null);
+            return;
+        }
+        var ctx = getSTContextSafe();
+        var owner = assetNamePart((meta && meta.owner) || 'wardrobe');
+        var name = assetNamePart((meta && meta.name) || 'outfit');
+        var filename = 'om_' + owner + '_' + name + '_' + Date.now();
+        fetch('/api/images/upload', {
+            method: 'POST',
+            headers: getSTRequestHeaders(ctx),
+            body: JSON.stringify({
+                image: parts.base64,
+                format: parts.format,
+                ch_name: 'Outfit-Manager',
+                filename: filename
+            })
+        }).then(function (res) {
+            if (!res.ok) {
+                return res.json().catch(function () { return {}; }).then(function (err) {
+                    throw new Error(err && err.error ? err.error : '图片上传失败');
+                });
+            }
+            return res.json();
+        }).then(function (json) {
+            var path = json && json.path ? String(json.path) : '';
+            if (!path) throw new Error('图片上传返回路径为空');
+            cb(null, { imageRef: path, imageUrl: path });
+        }).catch(function (err) {
+            cb(err && err.message ? err.message : String(err || '图片上传失败'));
+        });
+    }
+
+    function normalizeOutfitImageRef(ref) {
+        return String(ref || '').replace(/^\/+/, '');
+    }
+
+    function verifyOutfitImageAsset(ref, cb) {
+        var normalized = normalizeOutfitImageRef(ref);
+        if (!/^user\/images\//i.test(normalized)) {
+            cb('图片路径不是酒馆本地图片引用');
+            return;
+        }
+        fetch('/' + normalized, { cache: 'no-store' }).then(function (res) {
+            if (!res.ok) throw new Error('图片验证失败：HTTP ' + res.status);
+            return res.blob();
+        }).then(function (blob) {
+            if (!blob || blob.size <= 0) throw new Error('图片验证失败：文件为空');
+            if (blob.type && !/^image\//i.test(blob.type)) throw new Error('图片验证失败：返回内容不是图片');
+            cb(null, { size: blob.size, type: blob.type || '' });
+        }).catch(function (err) {
+            cb(err && err.message ? err.message : String(err || '图片验证失败'));
+        });
+    }
+
+    function deleteOutfitImageAsset(outfit, cb) {
+        var ref = outfit && (outfit.imageRef || outfit.imageUrl);
+        ref = normalizeOutfitImageRef(ref);
+        if (!ref || !/^user\/images\//i.test(ref)) {
+            if (cb) cb(null, false);
+            return;
+        }
+        fetch('/api/images/delete', {
+            method: 'POST',
+            headers: getSTRequestHeaders(getSTContextSafe()),
+            body: JSON.stringify({ path: ref })
+        }).then(function (res) {
+            if (!res.ok) throw new Error('图片删除失败');
+            if (cb) cb(null, true);
+        }).catch(function (err) {
+            if (cb) cb(err && err.message ? err.message : String(err || '图片删除失败'));
+        });
+    }
+
+    function collectStoredOutfitRecords(d) {
+        var records = [];
+        function addList(list, owner, source) {
+            (list || []).forEach(function (outfit, index) {
+                if (outfit && typeof outfit === 'object') records.push({ outfit: outfit, owner: owner, source: source, index: index });
+            });
+        }
+        addList(d && d.outfits, 'User', 'user');
+        Object.keys((d && d.chars) || {}).forEach(function (cn) {
+            addList(d.chars[cn] && d.chars[cn].outfits, cn, 'char');
+        });
+        ((d && d.presets) || []).forEach(function (preset, presetIndex) {
+            addList(preset && preset.outfits, '预设：' + ((preset && preset.name) || (presetIndex + 1)), 'preset');
+        });
+        Object.keys((d && d.virtualOutfits) || {}).forEach(function (id) {
+            var outfit = d.virtualOutfits[id];
+            if (outfit && typeof outfit === 'object') records.push({ outfit: outfit, owner: '临时穿搭', source: 'virtual', index: id });
+        });
+        return records;
+    }
+
+    function getLegacyImageMigrationTargets(d) {
+        return collectStoredOutfitRecords(d).filter(function (record) {
+            return isImageDataUrl(record.outfit && record.outfit.imageData);
+        });
+    }
+
+    function getLegacyImageMigrationStats(d) {
+        var targets = getLegacyImageMigrationTargets(d);
+        var base64Chars = 0;
+        targets.forEach(function (record) {
+            var parts = getImageDataParts(record.outfit.imageData);
+            if (parts) base64Chars += parts.base64.length;
+        });
+        return { count: targets.length, estimatedBytes: Math.floor(base64Chars * 3 / 4) };
+    }
+
+    function estimateImageDataBytes(imageData) {
+        var parts = getImageDataParts(imageData);
+        return parts ? Math.floor(parts.base64.length * 3 / 4) : 0;
+    }
+
+    function formatStorageBytes(bytes) {
+        bytes = Number(bytes) || 0;
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KiB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MiB';
+        return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GiB';
+    }
+
+    function deleteUnusedOutfitImageAssets(d, removedOutfits, cb) {
+        var usedRefs = {};
+        collectStoredOutfitRecords(d).forEach(function (record) {
+            var ref = normalizeOutfitImageRef(record.outfit && (record.outfit.imageRef || record.outfit.imageUrl));
+            if (ref) usedRefs[ref] = true;
+        });
+        var pending = [];
+        var seen = {};
+        (removedOutfits || []).forEach(function (outfit) {
+            var ref = normalizeOutfitImageRef(outfit && (outfit.imageRef || outfit.imageUrl));
+            if (!/^user\/images\//i.test(ref) || usedRefs[ref] || seen[ref]) return;
+            seen[ref] = true;
+            pending.push({ imageRef: ref, imageUrl: ref });
+        });
+        var result = { deleted: 0, failed: 0, skipped: (removedOutfits || []).length - pending.length, errors: [] };
+        function next() {
+            if (pending.length === 0) {
+                if (cb) cb(result);
+                return;
+            }
+            deleteOutfitImageAsset(pending.shift(), function (err, deleted) {
+                if (err) { result.failed++; result.errors.push(err); }
+                else if (deleted) result.deleted++;
+                next();
+            });
+        }
+        next();
+    }
+
+    function persistImageMigrationCheckpoint(d, force, cb) {
+        if (!force) {
+            saveToDB(d, function () { if (cb) cb(null); }, { skipShared: false, skipLocalBackup: true });
+            return;
+        }
+        saveToDB(d, function () {
+            var root = getSharedSettingsRoot();
+            if (!root) { if (cb) cb('无法访问 SillyTavern 共享设置'); return; }
+            d.updatedAt = Date.now();
+            root[SHARED_DATA_KEY] = d;
+            forceSaveSillyTavernSettings(cb);
+        }, { skipShared: true, skipLocalBackup: false });
+    }
+
+    function forceSaveSillyTavernSettings(cb) {
+        var finished = false;
+        function done(err) {
+            if (finished) return;
+            finished = true;
+            if (cb) cb(err || null);
+        }
+        function awaitSaveResult(result) {
+            if (result && typeof result.then === 'function') {
+                result.then(function () { done(null); }).catch(function (err) {
+                    done(err && err.message ? err.message : String(err || '共享设置保存失败'));
+                });
+            } else done(null);
+        }
+
+        var ctx = getSTContextSafe();
+        try {
+            if (ctx && typeof ctx.saveSettings === 'function') {
+                awaitSaveResult(ctx.saveSettings());
+                return;
+            }
+        } catch (e) {
+            done(e && e.message ? e.message : String(e || '共享设置保存失败'));
+            return;
+        }
+
+        import('/script.js').then(function (scriptModule) {
+            if (scriptModule && typeof scriptModule.saveSettings === 'function') {
+                awaitSaveResult(scriptModule.saveSettings());
+                return;
+            }
+            if (ctx && typeof ctx.saveSettingsDebounced === 'function') {
+                ctx.saveSettingsDebounced();
+                setTimeout(function () { done(null); }, 2000);
+                return;
+            }
+            done('当前 SillyTavern 未提供可用的设置保存 API');
+        }).catch(function (err) {
+            if (ctx && typeof ctx.saveSettingsDebounced === 'function') {
+                try {
+                    ctx.saveSettingsDebounced();
+                    setTimeout(function () { done(null); }, 2000);
+                    return;
+                } catch (e) {}
+            }
+            done(err && err.message ? err.message : String(err || '无法加载 SillyTavern 设置保存 API'));
+        });
+    }
+
+    function setImageMigrationAudit(run, status, error) {
+        var audit = getOutfitManagerAudit();
+        if (!audit) return;
+        audit.run_id = run ? run.runId : Date.now();
+        var remaining = run && run.running ? Math.max(0, run.total - run.migrated) : getLegacyImageMigrationTargets(load()).length;
+        audit.image_migration = {
+            status: status,
+            total: run ? run.total : remaining,
+            processed: run ? run.processed : 0,
+            migrated: run ? run.migrated : 0,
+            failed: run ? run.failed : 0,
+            remaining: remaining,
+            error: error || null
+        };
+        audit.last_error = error || null;
+    }
+
+    function setBackupCleanupAudit(status, count, totalBytes, nativeToolAvailable, error, analysis) {
+        var audit = getOutfitManagerAudit();
+        if (!audit) return;
+        analysis = analysis || {};
+        audit.run_id = Date.now();
+        audit.backup_cleanup = {
+            status: status,
+            count: Number(count) || 0,
+            total_bytes: Number(totalBytes) || 0,
+            native_tool_available: !!nativeToolAvailable,
+            delete_all_hidden: true,
+            clear_size_split: !!analysis.clearSizeSplit,
+            keep_count: Number(analysis.keepCount) || 0,
+            recommended_delete_count: Number(analysis.recommendedDeleteCount) || 0,
+            recommended_delete_bytes: Number(analysis.recommendedDeleteBytes) || 0,
+            error: error || null
+        };
+        audit.last_error = error || null;
+    }
+
+    function setBackupCleanupDeleteAudit(status, deletedCount, deletedBytes, error) {
+        var audit = getOutfitManagerAudit();
+        if (!audit) return;
+        audit.run_id = Date.now();
+        audit.backup_cleanup_delete = {
+            status: status,
+            deleted_count: Number(deletedCount) || 0,
+            deleted_bytes: Number(deletedBytes) || 0,
+            error: error || null
+        };
+        audit.last_error = error || null;
+    }
+
+    function analyzeSettingsBackups(backups) {
+        var items = (Array.isArray(backups) ? backups : []).map(function (item) {
+            return {
+                name: String((item && item.name) || ''),
+                hash: String((item && item.hash) || ''),
+                size: Number(item && item.size) || 0,
+                mtime: Number(item && item.mtime) || 0
+            };
+        }).sort(function (a, b) { return b.mtime - a.mtime; });
+        var result = {
+            items: items,
+            latest: items[0] || null,
+            preMigrationKeep: null,
+            recommendedDelete: [],
+            uncertain: items.slice(),
+            clearSizeSplit: false,
+            keepCount: items.length > 0 ? 1 : 0,
+            recommendedDeleteCount: 0,
+            recommendedDeleteBytes: 0,
+            largeThreshold: 0
+        };
+        if (items.length < 2 || !result.latest || result.latest.size <= 0) return result;
+
+        // A recommendation is made only when older backups are both at least
+        // twice the newest backup and at least 10 MiB larger. This deliberately
+        // avoids guessing when ordinary settings growth has no obvious split.
+        var threshold = Math.max(result.latest.size * 2, result.latest.size + 10 * 1024 * 1024);
+        var olderLarge = items.filter(function (item, index) {
+            return index > 0 && item.mtime < result.latest.mtime && item.size >= threshold;
+        });
+        if (olderLarge.length === 0) return result;
+
+        result.clearSizeSplit = true;
+        result.largeThreshold = threshold;
+        result.preMigrationKeep = olderLarge[0];
+        result.recommendedDelete = olderLarge.slice(1);
+        result.recommendedDeleteCount = result.recommendedDelete.length;
+        result.recommendedDeleteBytes = result.recommendedDelete.reduce(function (sum, item) { return sum + item.size; }, 0);
+        result.keepCount = 2;
+        result.uncertain = items.filter(function (item) {
+            return item !== result.latest && olderLarge.indexOf(item) < 0;
+        });
+        return result;
+    }
+
+    function formatBackupTime(mtime) {
+        if (!mtime) return '时间未知';
+        try { return new Date(mtime).toLocaleString(); } catch (e) { return '时间未知'; }
+    }
+
+    function backupRecordHtml(item) {
+        if (!item) return '';
+        return '<code>' + esc(item.name || '未命名备份') + '</code>（' + formatStorageBytes(item.size) + '，' + esc(formatBackupTime(item.mtime)) + '）';
+    }
+
+    function buildBackupCleanupGuidance(analysis) {
+        if (!analysis || !analysis.latest) return '当前没有需要处理的旧设置备份。';
+        if (!analysis.clearSizeSplit) {
+            return [
+                '<div style="line-height:1.6"><b>没有检测到明确的迁移前/迁移后体积断层，因此 OM 不给删除建议。</b></div>',
+                '<div style="line-height:1.6;margin-top:5px">请保留最新备份：' + backupRecordHtml(analysis.latest) + '。其余文件先不要批量删除。</div>'
+            ].join('');
+        }
+
+        return [
+            '<div style="line-height:1.6"><b>建议保留 2 份：</b></div>',
+            '<div style="line-height:1.6;margin-top:4px">① 迁移后的最新备份：' + backupRecordHtml(analysis.latest) + '</div>',
+            '<div style="line-height:1.6;margin-top:4px">② 迁移前保底备份：' + backupRecordHtml(analysis.preMigrationKeep) + '</div>',
+            analysis.uncertain.length > 0 ? '<div style="line-height:1.6;margin-top:4px">另外 ' + analysis.uncertain.length + ' 个无法明确判断的备份也会保留，不会进入批量清理。</div>' : '',
+            '<div style="line-height:1.6;margin-top:8px"><b>扫描识别：</b>' + analysis.recommendedDeleteCount + ' 个更早的大备份，共 ' + formatStorageBytes(analysis.recommendedDeleteBytes) + '。这里只提供统计提醒，不会执行删除。</div>'
+        ].join('');
+    }
+
+    function finalizeDataMaidReport(token) {
+        if (!token) return Promise.resolve();
+        return fetch('/api/data-maid/finalize', {
+            method: 'POST',
+            headers: getSTRequestHeaders(getSTContextSafe()),
+            body: JSON.stringify({ token: token })
+        }).then(function (res) {
+            if (!res.ok) throw new Error('结束酒馆清理扫描失败：HTTP ' + res.status);
+        });
+    }
+
+    function deleteRecommendedSettingsBackups(sheet, triggerButton) {
+        if (!sheet || !sheet.parentNode || !triggerButton || triggerButton.disabled) return;
+        var statusEl = sheet.querySelector('#om-backup-cleanup-status');
+        var reportToken = '';
+        var pendingAnalysis = null;
+        var deleteCompleted = false;
+        triggerButton.disabled = true;
+        if (statusEl) statusEl.textContent = '正在重新扫描并核对可安全删除的设置备份…';
+        setBackupCleanupDeleteAudit('pending', 0, 0, null);
+
+        fetch('/api/data-maid/report', {
+            method: 'POST',
+            headers: getSTRequestHeaders(getSTContextSafe())
+        }).then(function (res) {
+            if (!res.ok) throw new Error('重新扫描设置备份失败：HTTP ' + res.status);
+            return res.json();
+        }).then(function (json) {
+            reportToken = String((json && json.token) || '');
+            var backups = json && json.report && Array.isArray(json.report.settingsBackups)
+                ? json.report.settingsBackups
+                : [];
+            pendingAnalysis = analyzeSettingsBackups(backups);
+            var candidates = pendingAnalysis.recommendedDelete.filter(function (item) { return !!item.hash; });
+            if (!pendingAnalysis.clearSizeSplit || candidates.length === 0 || candidates.length !== pendingAnalysis.recommendedDeleteCount) {
+                throw new Error('当前没有能够安全批量删除的旧设置备份');
+            }
+
+            var message = [
+                '将永久删除 ' + candidates.length + ' 个更早的大型设置备份，预计释放 ' + formatStorageBytes(pendingAnalysis.recommendedDeleteBytes) + '。',
+                '',
+                '会保留：',
+                '1. 最新备份：' + pendingAnalysis.latest.name + '（' + formatStorageBytes(pendingAnalysis.latest.size) + '）',
+                '2. 迁移前保底：' + pendingAnalysis.preMigrationKeep.name + '（' + formatStorageBytes(pendingAnalysis.preMigrationKeep.size) + '）',
+                '3. 其他无法明确判断的备份：' + pendingAnalysis.uncertain.length + ' 个（全部保留）',
+                '',
+                '不会删除当前 settings.json、衣柜图片、聊天或其他备份分类。',
+                '删除后无法恢复，也不会进入回收站。确定继续吗？'
+            ].join('\n');
+            if (!confirm(message)) {
+                setBackupCleanupDeleteAudit('idle', 0, 0, null);
+                return finalizeDataMaidReport(reportToken).catch(function () {}).then(function () {
+                    reportToken = '';
+                    throw { omCancelled: true };
+                });
+            }
+
+            return fetch('/api/data-maid/delete', {
+                method: 'POST',
+                headers: getSTRequestHeaders(getSTContextSafe()),
+                body: JSON.stringify({
+                    token: reportToken,
+                    hashes: candidates.map(function (item) { return item.hash; })
+                })
+            }).then(function (res) {
+                if (!res.ok) throw new Error('批量删除设置备份失败：HTTP ' + res.status);
+                return finalizeDataMaidReport(reportToken).catch(function () {}).then(function () {
+                    reportToken = '';
+                    deleteCompleted = true;
+                    setBackupCleanupDeleteAudit('success', candidates.length, pendingAnalysis.recommendedDeleteBytes, null);
+                    if (statusEl && sheet.parentNode) statusEl.textContent = '已删除 ' + candidates.length + ' 个旧设置备份，正在重新扫描…';
+                    toast('✅ 已删除 ' + candidates.length + ' 个旧设置备份，释放约 ' + formatStorageBytes(pendingAnalysis.recommendedDeleteBytes));
+                    scanSettingsBackupSummary(sheet);
+                });
+            });
+        }).catch(function (err) {
+            if (reportToken) {
+                finalizeDataMaidReport(reportToken).catch(function () {});
+                reportToken = '';
+            }
+            if (err && err.omCancelled) {
+                if (statusEl && sheet.parentNode) statusEl.textContent = '已取消删除，没有修改任何备份。';
+                return;
+            }
+            var message = err && err.message ? err.message : String(err || '批量删除失败');
+            setBackupCleanupDeleteAudit('fail', 0, 0, message);
+            if (statusEl && sheet.parentNode) statusEl.textContent = '批量删除未执行：' + message;
+            toast('批量删除未执行：' + message, true);
+        }).finally(function () {
+            if (triggerButton && triggerButton.parentNode && !deleteCompleted) {
+                triggerButton.disabled = !(pendingAnalysis && pendingAnalysis.clearSizeSplit && pendingAnalysis.recommendedDeleteCount > 0);
+            }
+        });
+    }
+
+    function scanSettingsBackupSummary(sheet) {
+        if (!sheet || !sheet.parentNode) return;
+        if (sheet.getAttribute('data-om-backup-scanning') === '1') return;
+        sheet.setAttribute('data-om-backup-scanning', '1');
+        var statusEl = sheet.querySelector('#om-backup-cleanup-status');
+        var summaryEl = sheet.querySelector('#om-backup-cleanup-summary');
+        var scanBtn = sheet.querySelector('#om-backup-cleanup-scan');
+        var deleteBtn = sheet.querySelector('#om-backup-cleanup-delete');
+        var openBtn = sheet.querySelector('#om-backup-cleanup-open');
+        var nativeToolAvailable = !!document.getElementById('data_maid_button');
+        if (statusEl) statusEl.textContent = '正在读取酒馆的设置备份报告…';
+        if (summaryEl) summaryEl.textContent = '';
+        if (scanBtn) scanBtn.disabled = true;
+        if (deleteBtn) { deleteBtn.disabled = true; deleteBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 等待扫描结果'; }
+        if (openBtn) openBtn.disabled = !nativeToolAvailable;
+        setBackupCleanupAudit('pending', 0, 0, nativeToolAvailable, null);
+
+        var reportToken = '';
+        fetch('/api/data-maid/report', {
+            method: 'POST',
+            headers: getSTRequestHeaders(getSTContextSafe())
+        }).then(function (res) {
+            if (!res.ok) {
+                var err = new Error('当前酒馆不支持设置备份统计：HTTP ' + res.status);
+                err.httpStatus = res.status;
+                throw err;
+            }
+            return res.json();
+        }).then(function (json) {
+            reportToken = String((json && json.token) || '');
+            var backups = json && json.report && Array.isArray(json.report.settingsBackups)
+                ? json.report.settingsBackups
+                : [];
+            var totalBytes = backups.reduce(function (sum, item) {
+                return sum + (Number(item && item.size) || 0);
+            }, 0);
+            var analysis = analyzeSettingsBackups(backups);
+            return finalizeDataMaidReport(reportToken).then(function () {
+                reportToken = '';
+                setBackupCleanupAudit('success', backups.length, totalBytes, nativeToolAvailable, null, analysis);
+                if (sheet.parentNode) {
+                    if (statusEl) statusEl.textContent = backups.length > 0
+                        ? '检测到 ' + backups.length + ' 个设置备份，共 ' + formatStorageBytes(totalBytes) + '。'
+                        : '没有检测到设置备份。';
+                    if (summaryEl) {
+                        summaryEl.innerHTML = buildBackupCleanupGuidance(analysis);
+                    }
+                    if (deleteBtn) {
+                        deleteBtn.disabled = !analysis.clearSizeSplit || analysis.recommendedDeleteCount === 0;
+                        deleteBtn.innerHTML = analysis.clearSizeSplit && analysis.recommendedDeleteCount > 0
+                            ? '<i class="fa-solid fa-trash-can"></i> 一键清理上述 ' + analysis.recommendedDeleteCount + ' 个旧备份'
+                            : '<i class="fa-solid fa-shield-halved"></i> 暂无可安全批量删除的备份';
+                    }
+                }
+            });
+        }).catch(function (err) {
+            if (reportToken) {
+                finalizeDataMaidReport(reportToken).catch(function () {});
+                reportToken = '';
+            }
+            var message = err && err.message ? err.message : String(err || '无法读取设置备份报告');
+            var unsupported = err && (err.httpStatus === 404 || err.httpStatus === 405);
+            if (sheet.parentNode) {
+                if (statusEl) statusEl.textContent = unsupported ? '当前酒馆版本没有可用的备份统计接口。' : '设置备份统计失败：' + message;
+                if (summaryEl) summaryEl.textContent = '请手动进入：用户设置 → 杂项 → 清理（Clean-Up）→ Scan → Settings Backups。';
+                if (deleteBtn) { deleteBtn.disabled = true; deleteBtn.innerHTML = '<i class="fa-solid fa-shield-halved"></i> 扫描失败，不能批量删除'; }
+            }
+            setBackupCleanupAudit(unsupported ? 'unsupported' : 'fail', 0, 0, nativeToolAvailable, message);
+        }).finally(function () {
+            sheet.removeAttribute('data-om-backup-scanning');
+            if (sheet.parentNode && scanBtn) scanBtn.disabled = false;
+        });
+    }
+
+    function refreshSettingsBackupSummaries() {
+        document.querySelectorAll('[data-om-migration-sheet]').forEach(function (sheet) {
+            scanSettingsBackupSummary(sheet);
+        });
+    }
+
+    function removeDataMaidDeleteAllButtons(root) {
+        var scope = root && typeof root.querySelectorAll === 'function' ? root : document;
+        if (scope.matches && scope.matches('.dataMaidDeleteAll')) scope.remove();
+        scope.querySelectorAll('.dataMaidDeleteAll').forEach(function (button) { button.remove(); });
+    }
+
+    function installDataMaidSafetyGuard() {
+        removeDataMaidDeleteAllButtons(document);
+        if (dataMaidSafetyObserver || typeof MutationObserver === 'undefined' || !document.body) return;
+        dataMaidSafetyObserver = new MutationObserver(function (records) {
+            records.forEach(function (record) {
+                record.addedNodes.forEach(function (node) {
+                    if (node && node.nodeType === 1) removeDataMaidDeleteAllButtons(node);
+                });
+            });
+        });
+        dataMaidSafetyObserver.observe(document.body, { childList: true, subtree: true });
+    }
+
+    function openNativeDataMaidFromMigration(sheet) {
+        var button = document.getElementById('data_maid_button');
+        if (!button) {
+            var statusEl = sheet && sheet.querySelector('#om-data-maid-open-status');
+            if (statusEl) statusEl.textContent = '未找到酒馆清理工具入口，请按下方路径手动打开。';
+            var current = getOutfitManagerAudit();
+            var currentBackup = current && current.backup_cleanup;
+            setBackupCleanupAudit('unsupported', currentBackup && currentBackup.count, currentBackup && currentBackup.total_bytes, false, '未找到 #data_maid_button', {
+                clearSizeSplit: currentBackup && currentBackup.clear_size_split,
+                keepCount: currentBackup && currentBackup.keep_count,
+                recommendedDeleteCount: currentBackup && currentBackup.recommended_delete_count,
+                recommendedDeleteBytes: currentBackup && currentBackup.recommended_delete_bytes
+            });
+            return;
+        }
+        installDataMaidSafetyGuard();
+        closePopup();
+        setTimeout(function () { button.click(); }, 0);
+    }
+
+    function updateImageMigrationUI() {
+        var run = imageMigrationRun;
+        var stats = run
+            ? { count: Math.max(0, run.total - run.migrated), estimatedBytes: Math.max(0, run.remainingBytes || 0) }
+            : getLegacyImageMigrationStats(load());
+        document.querySelectorAll('[data-om-migration-sheet]').forEach(function (sheet) {
+            var statusEl = sheet.querySelector('#om-migration-status');
+            var detailEl = sheet.querySelector('#om-migration-detail');
+            var progressEl = sheet.querySelector('#om-migration-progress');
+            var startBtn = sheet.querySelector('#om-migration-start');
+            var stopBtn = sheet.querySelector('#om-migration-stop');
+            if (run) {
+                var pct = run.total > 0 ? Math.round(run.processed * 100 / run.total) : 100;
+                if (progressEl) progressEl.style.width = pct + '%';
+                if (detailEl) detailEl.textContent = '已处理 ' + run.processed + ' / ' + run.total + '，成功 ' + run.migrated + '，失败 ' + run.failed + '；仍有 ' + stats.count + ' 条 base64 记录。';
+                if (statusEl) {
+                    if (run.running && run.stopRequested) statusEl.textContent = '正在停止：当前图片完成后保存进度。';
+                    else if (run.running) statusEl.textContent = '迁移进行中：' + (run.currentName || '准备下一张图片…');
+                    else if (run.status === 'success') statusEl.textContent = '迁移完成。';
+                    else if (run.status === 'save_failed') statusEl.textContent = '图片已迁移，但共享设置强制保存失败；请重试保存。';
+                    else if (run.status === 'stopped') statusEl.textContent = '已停止并保存当前进度，可随时继续。';
+                    else statusEl.textContent = '本轮部分完成；失败图片保留了原 base64，可重试。';
+                }
+                if (startBtn) {
+                    startBtn.disabled = !!run.running || (stats.count === 0 && run.status !== 'save_failed');
+                    startBtn.textContent = run.status === 'save_failed' ? '重试保存迁移结果' : (stats.count > 0 ? '继续 / 重试剩余图片' : '已全部迁移');
+                }
+                if (stopBtn) { stopBtn.disabled = !run.running || run.stopRequested; stopBtn.style.display = run.running ? '' : 'none'; }
+            } else {
+                if (progressEl) progressEl.style.width = '0%';
+                if (detailEl) detailEl.textContent = '待迁移 ' + stats.count + ' 条 base64 图片记录，估算原图数据 ' + formatStorageBytes(stats.estimatedBytes) + '。';
+                if (statusEl) statusEl.textContent = stats.count > 0 ? '尚未开始。失败或中断时不会删除原图。' : '没有需要迁移的历史 base64 图片。';
+                if (startBtn) { startBtn.disabled = stats.count === 0; startBtn.textContent = stats.count > 0 ? '开始安全迁移' : '已全部迁移'; }
+                if (stopBtn) stopBtn.style.display = 'none';
+            }
+        });
+    }
+
+    function migrateOneLegacyImage(run, target, cb) {
+        var outfit = target.outfit;
+        var sourceImage = outfit && outfit.imageData;
+        if (!isImageDataUrl(sourceImage)) { cb(null, false); return; }
+
+        var reuseKey = target.migrationKey || '';
+        if (run.reuseKey !== reuseKey) {
+            run.reuseKey = reuseKey;
+            run.reuseSource = null;
+            run.reuseAsset = null;
+        }
+
+        function applyVerifiedAsset(asset) {
+            if (outfit.imageData !== sourceImage) { cb('图片在迁移过程中被修改，已保留新内容'); return; }
+            outfit.imageRef = asset.imageRef || asset.imageUrl;
+            outfit.imageUrl = asset.imageUrl || asset.imageRef;
+            delete outfit.imageData;
+            cb(null, true);
+        }
+
+        if (run.reuseAsset && run.reuseSource === sourceImage) {
+            applyVerifiedAsset(run.reuseAsset);
+            return;
+        }
+
+        function uploadFresh() {
+            saveOutfitImageAsset(sourceImage, { owner: target.owner, name: outfit.name || outfit.id || 'outfit' }, function (uploadErr, asset) {
+                if (uploadErr || !asset || !(asset.imageRef || asset.imageUrl)) { cb(uploadErr || '图片上传失败'); return; }
+                var ref = asset.imageRef || asset.imageUrl;
+                verifyOutfitImageAsset(ref, function (verifyErr) {
+                    if (verifyErr) {
+                        deleteOutfitImageAsset(asset, function () { cb(verifyErr); });
+                        return;
+                    }
+                    run.reuseSource = sourceImage;
+                    run.reuseAsset = asset;
+                    applyVerifiedAsset(asset);
+                });
+            });
+        }
+        // Legacy imageData is the source of truth. Do not trust a pre-existing
+        // imageRef merely because it is readable: old imports may have copied
+        // one placeholder ref onto many outfits with different base64 images.
+        uploadFresh();
+    }
+
+    function finishImageMigration(run, status) {
+        run.running = false;
+        run.status = status;
+        persistImageMigrationCheckpoint(run.data, true, function (saveErr) {
+            var remaining = getLegacyImageMigrationTargets(run.data).length;
+            var error = saveErr || (run.errors.length > 0 ? run.errors[run.errors.length - 1] : null);
+            run.reuseSource = null;
+            run.reuseAsset = null;
+            run.targets = [];
+            if (saveErr) run.status = 'save_failed';
+            else if (remaining === 0 && run.failed === 0 && status !== 'stopped') run.status = 'success';
+            else if (status !== 'stopped') run.status = 'partial';
+            setImageMigrationAudit(run, run.status === 'partial' ? 'fail' : run.status, error);
+            updateImageMigrationUI();
+            refreshSettingsBackupSummaries();
+            renderGrid();
+            if (run.status === 'success') toast('✅ 历史图片迁移完成，共迁移 ' + run.migrated + ' 条记录');
+            else if (run.status === 'stopped') toast('已停止迁移并保存当前进度');
+            else if (run.status === 'save_failed') toast('图片已迁移，但共享设置保存失败：' + saveErr, true);
+            else toast('迁移部分完成：成功 ' + run.migrated + '，失败 ' + run.failed + '；可再次重试', true);
+        });
+    }
+
+    function retryImageMigrationSave() {
+        var run = imageMigrationRun;
+        if (!run || run.status !== 'save_failed' || run.running) return;
+        run.running = true;
+        run.status = 'running';
+        updateImageMigrationUI();
+        persistImageMigrationCheckpoint(run.data, true, function (err) {
+            run.running = false;
+            if (err) {
+                run.status = 'save_failed';
+                setImageMigrationAudit(run, 'save_failed', err);
+                toast('共享设置保存仍然失败：' + err, true);
+            } else {
+                run.status = getLegacyImageMigrationTargets(run.data).length === 0 && run.failed === 0 ? 'success' : 'partial';
+                setImageMigrationAudit(run, run.status === 'partial' ? 'fail' : run.status, run.status === 'partial' ? (run.errors[run.errors.length - 1] || null) : null);
+                toast('✅ 迁移结果已强制保存到共享设置');
+            }
+            updateImageMigrationUI();
+            refreshSettingsBackupSummaries();
+        });
+    }
+
+    function continueImageMigration(run) {
+        if (!run.running) return;
+        if (run.stopRequested || run.index >= run.targets.length) {
+            finishImageMigration(run, run.stopRequested ? 'stopped' : 'complete');
+            return;
+        }
+        var target = run.targets[run.index++];
+        var targetBytes = estimateImageDataBytes(target.outfit && target.outfit.imageData);
+        run.currentName = (target.owner ? target.owner + ' / ' : '') + ((target.outfit && target.outfit.name) || '未命名穿搭');
+        updateImageMigrationUI();
+        migrateOneLegacyImage(run, target, function (err, migrated) {
+            run.processed++;
+            if (err) { run.failed++; run.errors.push(run.currentName + '：' + err); }
+            else if (migrated) {
+                run.migrated++;
+                run.remainingBytes = Math.max(0, run.remainingBytes - targetBytes);
+            }
+            saveToSharedSettings(run.data, false);
+            setImageMigrationAudit(run, 'running', err || null);
+            updateImageMigrationUI();
+            if (run.stopRequested || run.index >= run.targets.length) {
+                continueImageMigration(run);
+                return;
+            }
+            if (run.processed % 20 === 0) {
+                persistImageMigrationCheckpoint(run.data, false, function () { continueImageMigration(run); });
+            } else setTimeout(function () { continueImageMigration(run); }, 0);
+        });
+    }
+
+    function startImageMigration() {
+        if (imageMigrationRun && imageMigrationRun.running) return;
+        var d = load();
+        var targets = getLegacyImageMigrationTargets(d);
+        if (targets.length === 0) { toast('没有需要迁移的历史 base64 图片'); updateImageMigrationUI(); return; }
+        var remainingBytes = 0;
+        targets.forEach(function (target, index) {
+            target.migrationKey = target.outfit.id ? 'id:' + target.outfit.id : 'record:' + index;
+            remainingBytes += estimateImageDataBytes(target.outfit.imageData);
+        });
+        targets.sort(function (a, b) { return a.migrationKey < b.migrationKey ? -1 : (a.migrationKey > b.migrationKey ? 1 : 0); });
+        imageMigrationRun = {
+            runId: Date.now(), data: d, targets: targets, total: targets.length, index: 0,
+            processed: 0, migrated: 0, failed: 0, errors: [], currentName: '',
+            remainingBytes: remainingBytes, stopRequested: false, running: true, status: 'running', reuseKey: '', reuseSource: null, reuseAsset: null
+        };
+        setImageMigrationAudit(imageMigrationRun, 'running', null);
+        updateImageMigrationUI();
+        continueImageMigration(imageMigrationRun);
+    }
+
+    function requestStopImageMigration() {
+        if (!imageMigrationRun || !imageMigrationRun.running) return;
+        imageMigrationRun.stopRequested = true;
+        updateImageMigrationUI();
+    }
+
+    function setOutfitImageFields(outfit, imageValue, meta, cb) {
+        var oldAsset = { imageRef: outfit.imageRef || outfit.imageUrl || '', imageUrl: outfit.imageUrl || outfit.imageRef || '' };
+        function cleanupReplacedAsset() {
+            var oldRef = normalizeOutfitImageRef(oldAsset.imageRef || oldAsset.imageUrl);
+            var newRef = normalizeOutfitImageRef(outfit.imageRef || outfit.imageUrl);
+            if (!oldRef || oldRef === newRef) return;
+            deleteUnusedOutfitImageAssets(load(), [oldAsset], function (result) {
+                if (result.failed > 0) try { console.warn('[OM-IMG] replaced image cleanup failed:', result.errors); } catch (e) {}
+            });
+        }
+        delete outfit.imageData;
+        delete outfit.imageRef;
+        delete outfit.imageUrl;
+        if (!imageValue) {
+            cleanupReplacedAsset();
+            if (cb) cb(null, false);
+            return;
+        }
+        if (!isImageDataUrl(imageValue)) {
+            outfit.imageRef = imageValue;
+            outfit.imageUrl = imageValue;
+            cleanupReplacedAsset();
+            if (cb) cb(null, false);
+            return;
+        }
+        saveOutfitImageAsset(imageValue, meta, function (err, asset) {
+            if (!err && asset && (asset.imageRef || asset.imageUrl)) {
+                outfit.imageRef = asset.imageRef || asset.imageUrl;
+                outfit.imageUrl = asset.imageUrl || asset.imageRef;
+                cleanupReplacedAsset();
+                if (cb) cb(null, true);
+                return;
+            }
+            outfit.imageData = imageValue;
+            cleanupReplacedAsset();
+            if (cb) cb(err || null, false);
+        });
+    }
+
+    function localImageRefToDataUrl(imageRef, cb) {
+        var ref = String(imageRef || '');
+        if (!ref || isImageDataUrl(ref) || /^https?:\/\//i.test(ref)) {
+            cb(null, ref);
+            return;
+        }
+        var url = ref.charAt(0) === '/' ? ref : '/' + ref;
+        fetch(url).then(function (res) {
+            if (!res.ok) throw new Error('本地图片读取失败：HTTP ' + res.status);
+            return res.blob();
+        }).then(function (blob) {
+            var reader = new FileReader();
+            reader.onload = function () { cb(null, reader.result); };
+            reader.onerror = function () { cb('本地图片转换失败'); };
+            reader.readAsDataURL(blob);
+        }).catch(function (err) {
+            cb(err && err.message ? err.message : String(err || '本地图片读取失败'));
+        });
     }
 
     function countAllOutfits(d) {
@@ -918,14 +1771,15 @@
             season: base.season || '',
             sceneTag: base.sceneTag || '',
             description: base.description || promptText || '',
-            imageData: imageData,
             createdAt: Date.now()
         };
-        if (dd.currentView === 'char' && dd.currentChar) getCharData(dd, dd.currentChar).outfits.push(newOutfit);
-        else dd.outfits.push(newOutfit);
-        save(dd);
-        renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn();
-        toast('已另存为新穿搭');
+        setOutfitImageFields(newOutfit, imageData, { owner: owner || (dd.currentView === 'char' ? dd.currentChar : 'User'), name: newOutfit.name }, function (err) {
+            if (dd.currentView === 'char' && dd.currentChar) getCharData(dd, dd.currentChar).outfits.push(newOutfit);
+            else dd.outfits.push(newOutfit);
+            save(dd);
+            renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn();
+            toast(err ? '已另存为新穿搭（图片缓存失败，已保留旧格式）' : '已另存为新穿搭');
+        });
     }
 
     function saveChatu8ImageToExisting(source, imageData) {
@@ -933,10 +1787,11 @@
         var dd = load();
         var hit = findPersistentOutfit(dd, source.id);
         if (!hit) return false;
-        hit.outfit.imageData = imageData;
-        save(dd);
-        renderGrid(); renderBottomStatus(); updateBtn();
-        toast('已保存到这套穿搭');
+        setOutfitImageFields(hit.outfit, imageData, { owner: hit.owner || source.owner || 'User', name: hit.outfit.name }, function (err) {
+            save(dd);
+            renderGrid(); renderBottomStatus(); updateBtn();
+            toast(err ? '已保存到这套穿搭（图片缓存失败，已保留旧格式）' : '已保存到这套穿搭');
+        });
         return true;
     }
 
@@ -1107,6 +1962,9 @@
             '@keyframes om-fadein{from{opacity:0}to{opacity:1}}',
             '@keyframes om-sheet-up{from{transform:translateY(100%)}to{transform:translateY(0)}}',
             '@keyframes om-popin{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}',
+
+            /* Data Maid safety: keep per-file trash buttons, remove category-wide Delete All broom. */
+            '.dataMaidDeleteAll{display:none!important;pointer-events:none!important;}',
 
             /* 主界面容器：移动端全屏，PC 端可缩放窗口 */
             '.om-light{--om-bg:#f5f5f7;--om-bg2:#ececef;--om-text:#111;--om-border:rgba(0,0,0,.1);--om-card-bg:rgba(0,0,0,.04);--om-head-bg:rgba(255,255,255,.8);}',
@@ -1486,6 +2344,8 @@
             '.om-modal-cancel{padding:9px;border-radius:9px;border:none;background:none;',
             'color:inherit;cursor:pointer;font-size:.85em;opacity:.5;font-family:inherit;margin-top:4px;}',
             '.om-modal-cancel:hover{opacity:1;}',
+            '.om-checkrow{display:flex;gap:8px;align-items:center;font-size:.84em;line-height:1.35;}',
+            '.om-checkrow input{margin-top:2px;flex:0 0 auto;}',
             /* 全屏 lightbox */
             '.om-lightbox{position:absolute;inset:0;z-index:3;background:rgba(0,0,0,.92);pointer-events:auto;',
             'display:flex;align-items:center;justify-content:center;animation:om-popin .18s ease;}',
@@ -2367,12 +3227,16 @@
                 e.stopPropagation(); var cn = btn.dataset.cn;
                 if (!confirm('删除角色「' + cn + '」及其所有穿搭？')) return;
                 var dd = load();
+                var removedOutfits = dd.chars && dd.chars[cn] ? (dd.chars[cn].outfits || []).slice() : [];
                 if (dd.chars) delete dd.chars[cn];
                 var idx = dd.charNames.indexOf(cn); if (idx !== -1) dd.charNames.splice(idx, 1);
                 if (dd.charFavorites) { var fi = dd.charFavorites.indexOf(cn); if (fi !== -1) dd.charFavorites.splice(fi, 1); }
                 if (dd.charGroups) { for (var g in dd.charGroups) { var gi = dd.charGroups[g].indexOf(cn); if (gi !== -1) dd.charGroups[g].splice(gi, 1); } }
                 if (dd.currentChar === cn) dd.currentChar = '';
                 save(dd); renderViewbar(); renderCatbar(); renderGrid(); renderBottomStatus(); toast('已删除角色「' + cn + '」');
+                deleteUnusedOutfitImageAssets(dd, removedOutfits, function (result) {
+                    if (result.failed > 0) toast('角色已删除，但有 ' + result.failed + ' 张服务器图片清理失败', true);
+                });
             });
         });
         // 点击外部关闭
@@ -2669,6 +3533,9 @@
                 if (batchSelected.length === 0) { toast('请先选择穿搭', true); return; }
                 if (!confirm('确定删除已选 ' + batchSelected.length + ' 套穿搭？')) return;
                 var dd = load();
+                var removedOutfits = collectStoredOutfitRecords(dd).filter(function (record) {
+                    return (record.source === 'user' || record.source === 'char') && batchSelected.indexOf(record.outfit.id) !== -1;
+                }).map(function (record) { return record.outfit; });
                 dd.outfits = dd.outfits.filter(function (o) { return batchSelected.indexOf(o.id) === -1; });
                 if (dd.chars) { for (var cn in dd.chars) { dd.chars[cn].outfits = (dd.chars[cn].outfits || []).filter(function (o) { return batchSelected.indexOf(o.id) === -1; }); } }
                 batchSelected.forEach(function (id) {
@@ -2676,6 +3543,9 @@
                     if (dd.chars) { for (var cn2 in dd.chars) { var cai = (dd.chars[cn2].activeIds || []).indexOf(id); if (cai !== -1) dd.chars[cn2].activeIds.splice(cai, 1); } }
                 });
                 save(dd); updateBtn(); renderBottomStatus(); toast('已删除 ' + batchSelected.length + ' 套穿搭'); batchSelected = []; renderGrid();
+                deleteUnusedOutfitImageAssets(dd, removedOutfits, function (result) {
+                    if (result.failed > 0) toast('穿搭已删除，但有 ' + result.failed + ' 张服务器图片清理失败', true);
+                });
             });
 
             var bpasteBtn = area.querySelector('#om-batch-paste');
@@ -3397,11 +4267,16 @@ function renderQuickScenes(d) {
             closeSheet(sheet);
             if (!confirm('确定删除「' + outfit.name + '」？')) return;
             var dd = load();
+            var removedHit = findPersistentOutfit(dd, outfit.id);
+            var removedOutfits = removedHit ? [removedHit.outfit] : [];
             dd.outfits = dd.outfits.filter(function (o) { return o.id !== outfit.id; });
             // 也从chars中查找并删除
             if (dd.chars) { for (var cn in dd.chars) { dd.chars[cn].outfits = (dd.chars[cn].outfits || []).filter(function (o) { return o.id !== outfit.id; }); var cai = (dd.chars[cn].activeIds || []).indexOf(outfit.id); if (cai !== -1) dd.chars[cn].activeIds.splice(cai, 1); } }
             var ai = (dd.activeIds || []).indexOf(outfit.id); if (ai !== -1) dd.activeIds.splice(ai, 1);
             save(dd); updateBtn(); renderBottomStatus(); renderGrid(); toast('已删除');
+            deleteUnusedOutfitImageAssets(dd, removedOutfits, function (result) {
+                if (result.failed > 0) toast('穿搭已删除，但服务器图片清理失败', true);
+            });
         });
     }
 
@@ -3514,7 +4389,11 @@ function renderQuickScenes(d) {
                 if (descBlocks.length === 0) { descBlocks = descText.split(/\n\s*\n\s*\n/).filter(function(b) { return b.trim(); }); }
                 if (descBlocks.length === 0) { descBlocks = [descText]; }
             }
-            var dd = load(); var created = 0;
+            var dd = load(); var created = 0; var pendingImages = 0; var imageErrors = 0;
+            function finishBatchCreate() {
+                save(dd); closeSheet(sheet); renderCatbar(); renderGrid(); renderBottomStatus();
+                toast('已创建 ' + created + ' 套' + (imageErrors > 0 ? '（' + imageErrors + ' 张图片缓存失败，已保留旧格式）' : ''));
+            }
             batchDataUrls.forEach(function (url, i) {
                 var name = prefix ? prefix + ' ' + (i + 1) : ('穿搭 ' + (i + 1));
                 var desc = '', nm = name, oc = cat, ost = style, osn = season, osc = scene, otype = baType;
@@ -3529,12 +4408,18 @@ function renderQuickScenes(d) {
                     var psc = findKey('场景'); if (psc) osc = psc;
                     var pdesc = findKey('描述'); if (pdesc) desc = pdesc;
                 }
-                var vcs = getViewCategories(dd); if (oc && vcs.indexOf(oc) === -1) vcs.push(oc); var o = { id: genId(), name: nm, category: oc, type: otype, style: ost, season: osn, sceneTag: osc, description: desc, imageData: url, createdAt: Date.now() };
+                var vcs = getViewCategories(dd); if (oc && vcs.indexOf(oc) === -1) vcs.push(oc); var o = { id: genId(), name: nm, category: oc, type: otype, style: ost, season: osn, sceneTag: osc, description: desc, createdAt: Date.now() };
                 if (dd.currentView === 'char' && dd.currentChar) getCharData(dd, dd.currentChar).outfits.push(o);
                 else dd.outfits.push(o);
                 created++;
+                pendingImages++;
+                setOutfitImageFields(o, url, { owner: dd.currentView === 'char' && dd.currentChar ? dd.currentChar : 'User', name: nm }, function (err) {
+                    if (err) imageErrors++;
+                    pendingImages--;
+                    if (pendingImages <= 0) finishBatchCreate();
+                });
             });
-            save(dd); closeSheet(sheet); renderCatbar(); renderGrid(); renderBottomStatus(); toast('已创建 ' + created + ' 套');
+            if (pendingImages === 0) finishBatchCreate();
         });
         sheet.querySelector('#om-ba-cancel').addEventListener('click', function () { closeSheet(sheet); });
         sheet.querySelector('#om-ba-copyprompt').addEventListener('click', function (e) { e.stopPropagation(); var prompt = '请逐一分析以下穿搭照片，对每张照片严格按以下格式返回（不要额外解释，直接输出）：\n\n--- 第1套 ---\n名称：<5-15字简短名称>\n分类：<睡衣/制服/常服/外出服>\n风格：<学院/简约/运动/甜美/通勤/休闲/街头/优雅/舒适>\n季节：<春/夏/秋/冬/全年>\n场景：<外出/家居/办公/约会/运动/睡前>\n描述：<100-200字服装描述>\n\n--- 第2套 ---\n...'; navigator.clipboard.writeText(prompt).then(function() { toast('提示词已复制！粘贴到外部AI对话框即可'); }).catch(function() { toast('复制失败，请手动复制', true); }); });
@@ -3958,33 +4843,42 @@ function renderQuickScenes(d) {
             var style = sheet.querySelector('#om-dstyle') ? sheet.querySelector('#om-dstyle').value.trim() : '';
             var season = sheet.querySelector('#om-dseason') ? sheet.querySelector('#om-dseason').value.trim() : '';
             var dd = load();
+            var imageTarget = null;
+            var ownerLabel = dd.currentView === 'char' && dd.currentChar ? dd.currentChar : 'User';
             if (outfit) {
                 // 编辑已有穿搭 - 在所有数据中查找
                 var found = false;
                 for (var i = 0; i < dd.outfits.length; i++) {
                     if (dd.outfits[i].id === outfit.id) {
-                        Object.assign(dd.outfits[i], { name: name, category: cat, type: otype, style: style, season: season, description: desc, sceneTag: scene, imageData: editImgData }); found = true; break;
+                        Object.assign(dd.outfits[i], { name: name, category: cat, type: otype, style: style, season: season, description: desc, sceneTag: scene });
+                        imageTarget = dd.outfits[i]; ownerLabel = 'User'; found = true; break;
                     }
                 }
                 if (!found && dd.chars) {
                     for (var cn in dd.chars) {
                         var co = dd.chars[cn].outfits || [];
                         for (var j = 0; j < co.length; j++) {
-                            if (co[j].id === outfit.id) { Object.assign(co[j], { name: name, category: cat, type: otype, style: style, season: season, description: desc, sceneTag: scene, imageData: editImgData }); found = true; break; }
+                            if (co[j].id === outfit.id) {
+                                Object.assign(co[j], { name: name, category: cat, type: otype, style: style, season: season, description: desc, sceneTag: scene });
+                                imageTarget = co[j]; ownerLabel = cn; found = true; break;
+                            }
                         }
                         if (found) break;
                     }
                 }
             } else {
                 // 新增穿搭 - 放入当前视角
-                var newOutfit = { id: genId(), name: name, category: cat, type: otype, style: style, season: season, description: desc, sceneTag: scene, imageData: editImgData, createdAt: Date.now() };
+                var newOutfit = { id: genId(), name: name, category: cat, type: otype, style: style, season: season, description: desc, sceneTag: scene, createdAt: Date.now() };
+                imageTarget = newOutfit;
                 if (dd.currentView === 'char' && dd.currentChar) {
                     getCharData(dd, dd.currentChar).outfits.push(newOutfit);
                 } else {
                     dd.outfits.push(newOutfit);
                 }
             }
-            save(dd); closeSheet(sheet); toast('✨ 已保存：' + name); renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn();
+            setOutfitImageFields(imageTarget || {}, editImgData, { owner: ownerLabel, name: name }, function (err) {
+                save(dd); closeSheet(sheet); toast(err ? '✨ 已保存：' + name + '（图片缓存失败，已保留旧格式）' : '✨ 已保存：' + name); renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn();
+            });
         });
     }
 
@@ -4045,8 +4939,10 @@ function renderQuickScenes(d) {
         var overwriteBtn = sheet.querySelector('#om-preset-overwrite');
         if (overwriteBtn) overwriteBtn.addEventListener('click', function () {
             var dd = load();
+            var replacedPresetOutfits = [];
             for (var i = 0; i < dd.presets.length; i++) {
                 if (dd.presets[i].id === activePresetId) {
+                    replacedPresetOutfits = (dd.presets[i].outfits || []).slice();
                     dd.presets[i].outfits = JSON.parse(JSON.stringify(dd.outfits));
                     dd.presets[i].categories = JSON.parse(JSON.stringify(dd.categories));
                     dd.presets[i].activeIds = JSON.parse(JSON.stringify(dd.activeIds));
@@ -4055,6 +4951,9 @@ function renderQuickScenes(d) {
                 }
             }
             save(dd); closeSheet(sheet); toast('✅ 已保存到「' + currentPreset.name + '」'); openPresetsSheet();
+            deleteUnusedOutfitImageAssets(dd, replacedPresetOutfits, function (result) {
+                if (result.failed > 0) toast('预设已更新，但有 ' + result.failed + ' 张旧服务器图片清理失败', true);
+            });
         });
 
         // 保存为新预设
@@ -4075,11 +4974,15 @@ function renderQuickScenes(d) {
                 if (e.target.closest('.om-preset-ren') || e.target.closest('.om-preset-del')) return;
                 var dd = load(); var p = dd.presets[parseInt(item.dataset.idx)]; if (!p) return;
                 if (!confirm('加载预设「' + p.name + '」？这将覆盖当前所有穿搭数据。')) return;
+                var replacedUserOutfits = (dd.outfits || []).slice();
                 dd.outfits = JSON.parse(JSON.stringify(p.outfits || []));
                 dd.categories = JSON.parse(JSON.stringify(p.categories || []));
                 dd.activeIds = JSON.parse(JSON.stringify(p.activeIds || []));
                 dd.activePresetId = p.id;
                 save(dd); closeSheet(sheet); renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); toast('✅ 已加载「' + p.name + '」');
+                deleteUnusedOutfitImageAssets(dd, replacedUserOutfits, function (result) {
+                    if (result.failed > 0) toast('预设已加载，但有 ' + result.failed + ' 张旧服务器图片清理失败', true);
+                });
             });
         });
         sheet.querySelectorAll('.om-preset-ren').forEach(function (btn) {
@@ -4095,13 +4998,205 @@ function renderQuickScenes(d) {
                 e.stopPropagation();
                 var dd = load(); var p = dd.presets[parseInt(btn.dataset.idx)]; if (!p) return;
                 if (!confirm('删除预设「' + p.name + '」？')) return;
+                var removedPresetOutfits = (p.outfits || []).slice();
                 if (p.id === activePresetId) { dd.activePresetId = null; }
                 dd.presets.splice(parseInt(btn.dataset.idx), 1); save(dd); closeSheet(sheet); openPresetsSheet(); toast('已删除');
+                deleteUnusedOutfitImageAssets(dd, removedPresetOutfits, function (result) {
+                    if (result.failed > 0) toast('预设已删除，但有 ' + result.failed + ' 张服务器图片清理失败', true);
+                });
             });
         });
     }
 
     // ── 设置 Bottom Sheet ─────────────────────────────────────
+    function getOutfitRepairSignature(outfit) {
+        return JSON.stringify([
+            String((outfit && outfit.name) || ''),
+            String((outfit && outfit.description) || ''),
+            String((outfit && outfit.category) || ''),
+            String((outfit && outfit.type) || '')
+        ]);
+    }
+
+    function findDuplicateCharacterImageRepairCandidate(d) {
+        var chars = (d && d.chars) || {};
+        var names = Object.keys(chars);
+        var best = null;
+        names.forEach(function (targetName) {
+            var targetOutfits = (chars[targetName] && chars[targetName].outfits) || [];
+            if (targetOutfits.length < 10) return;
+            var refCounts = {};
+            targetOutfits.forEach(function (outfit) {
+                var ref = normalizeOutfitImageRef(outfit && (outfit.imageRef || outfit.imageUrl));
+                if (ref) refCounts[ref] = (refCounts[ref] || 0) + 1;
+            });
+            var dominant = Object.keys(refCounts).map(function (ref) { return { ref: ref, count: refCounts[ref] }; })
+                .sort(function (a, b) { return b.count - a.count; })[0];
+            if (!dominant || dominant.count < 10 || dominant.count / targetOutfits.length < 0.8) return;
+
+            names.forEach(function (donorName) {
+                if (donorName === targetName) return;
+                var donorOutfits = (chars[donorName] && chars[donorName].outfits) || [];
+                if (donorOutfits.length < dominant.count) return;
+                var donorRefs = {};
+                donorOutfits.forEach(function (outfit) {
+                    var ref = normalizeOutfitImageRef(outfit && (outfit.imageRef || outfit.imageUrl));
+                    if (ref) donorRefs[ref] = true;
+                });
+                if (Object.keys(donorRefs).length < Math.min(donorOutfits.length, dominant.count) * 0.8) return;
+
+                var pairs = [];
+                var max = Math.min(targetOutfits.length, donorOutfits.length);
+                for (var i = 0; i < max; i++) {
+                    var target = targetOutfits[i];
+                    var donor = donorOutfits[i];
+                    var targetRef = normalizeOutfitImageRef(target && (target.imageRef || target.imageUrl));
+                    var donorRef = donor && (donor.imageRef || donor.imageUrl);
+                    if (targetRef !== dominant.ref || !donorRef) continue;
+                    if (getOutfitRepairSignature(target) !== getOutfitRepairSignature(donor)) continue;
+                    pairs.push({ target: target, donor: donor, index: i });
+                }
+                if (pairs.length < 10 || pairs.length / dominant.count < 0.95) return;
+                var candidate = {
+                    targetName: targetName,
+                    donorName: donorName,
+                    dominantRef: dominant.ref,
+                    dominantCount: dominant.count,
+                    pairs: pairs
+                };
+                if (!best || candidate.pairs.length > best.pairs.length) best = candidate;
+            });
+        });
+        return best;
+    }
+
+    function repairDuplicateCharacterImageRefs(candidate, cb) {
+        if (!candidate || !candidate.pairs || candidate.pairs.length === 0) { cb('没有可修复的图片映射'); return; }
+        var d = load();
+        var liveCandidate = findDuplicateCharacterImageRepairCandidate(d);
+        if (!liveCandidate || liveCandidate.targetName !== candidate.targetName || liveCandidate.donorName !== candidate.donorName) {
+            cb('衣柜数据已变化，请重新打开迁移面板后再试');
+            return;
+        }
+        liveCandidate.pairs.forEach(function (pair) {
+            var ref = pair.donor.imageRef || pair.donor.imageUrl;
+            pair.target.imageRef = ref;
+            pair.target.imageUrl = pair.donor.imageUrl || pair.donor.imageRef;
+            delete pair.target.imageData;
+        });
+        persistImageMigrationCheckpoint(d, true, function (err) {
+            var audit = getOutfitManagerAudit();
+            if (audit) {
+                audit.run_id = Date.now();
+                audit.image_repair = {
+                    status: err ? 'fail' : 'success',
+                    target: liveCandidate.targetName,
+                    donor: liveCandidate.donorName,
+                    repaired: liveCandidate.pairs.length,
+                    error: err || null
+                };
+                audit.last_error = err || null;
+            }
+            if (err) { cb(err); return; }
+            deleteUnusedOutfitImageAssets(d, [{ imageRef: liveCandidate.dominantRef, imageUrl: liveCandidate.dominantRef }], function () {
+                cb(null, liveCandidate.pairs.length);
+            });
+        });
+    }
+
+    function openImageMigrationSheet() {
+        var stats = getLegacyImageMigrationStats(load());
+        var repairCandidate = findDuplicateCharacterImageRepairCandidate(load());
+        if (!imageMigrationRun && stats.count === 0) {
+            var audit = getOutfitManagerAudit();
+            if (audit) {
+                audit.run_id = Date.now();
+                audit.image_migration = { status: 'success', total: 0, processed: 0, migrated: 0, failed: 0, remaining: 0, error: null };
+                audit.last_error = null;
+            }
+        }
+        var repairHtml = repairCandidate ? [
+            '<div class="om-divider"></div>',
+            '<div class="om-sec-title"><i class="fa-solid fa-triangle-exclamation" style="margin-right:5px"></i>检测到异常重复图片</div>',
+            '<div class="om-hint" style="line-height:1.6;margin-bottom:8px">角色「' + esc(repairCandidate.targetName) + '」有 ' + repairCandidate.dominantCount + ' 件衣服共用同一图片；已找到内容和顺序一致的正常衣柜「' + esc(repairCandidate.donorName) + '」，可安全恢复其中 ' + repairCandidate.pairs.length + ' 件图片映射。</div>',
+            '<button class="om-btn om-btn-safe" id="om-migration-repair" style="width:100%"><i class="fa-solid fa-screwdriver-wrench"></i> 修复「' + esc(repairCandidate.targetName) + '」的重复图片</button>',
+            '<div id="om-migration-repair-status" class="om-hint" style="margin-top:7px"></div>'
+        ].join('') : '';
+        var sheet = createSheet([
+            '<div class="om-sheet-title om-settings-title">' +
+            '<span class="om-settings-title-main"><i class="fa-solid fa-images"></i>历史图片安全迁移</span>' +
+            '<button class="om-sheet-close" id="om-migration-close" type="button"><i class="fa-solid fa-xmark"></i>退出</button>' +
+            '</div>',
+            '<div class="om-hint" style="line-height:1.6;margin-bottom:10px">逐张上传到 <code>user/images/Outfit-Manager</code>，并重新读取验证成功后才删除该条 <code>imageData</code>。失败图片会保留原 base64；停止后会强制保存当前进度。</div>',
+            '<div class="om-storage-info" id="om-migration-summary">待迁移 ' + stats.count + ' 条记录，估算原图数据 ' + formatStorageBytes(stats.estimatedBytes) + '。</div>',
+            '<div style="height:8px;border-radius:999px;background:rgba(127,127,127,.18);overflow:hidden;margin:12px 0 8px"><div id="om-migration-progress" style="height:100%;width:0;background:#4caf50;transition:width .2s"></div></div>',
+            '<div id="om-migration-status" style="font-size:.86em;font-weight:600;margin-bottom:5px"></div>',
+            '<div id="om-migration-detail" class="om-hint" style="line-height:1.5"></div>',
+            '<div class="om-divider"></div>',
+            '<div class="om-hint" style="line-height:1.5;margin-bottom:10px">建议先导出一份“包含图片 base64”的完整备份。迁移期间不要编辑、删除或导入衣服。</div>',
+            '<div class="om-btn-row">',
+            '<button class="om-btn om-btn-safe" id="om-migration-start"><i class="fa-solid fa-play"></i> 开始安全迁移</button>',
+            '<button class="om-btn om-btn-danger" id="om-migration-stop" style="display:none"><i class="fa-solid fa-stop"></i> 停止并保存</button>',
+            '</div>',
+            repairHtml,
+            '<div class="om-divider"></div>',
+            '<div class="om-sec-title"><i class="fa-solid fa-magnifying-glass" style="margin-right:5px"></i>② 重新扫描旧设置备份</div>',
+            '<div id="om-backup-cleanup-status" class="om-storage-info">等待统计设置备份…</div>',
+            '<div id="om-backup-cleanup-summary" class="om-hint" style="line-height:1.5;margin-top:7px"></div>',
+            '<button class="om-btn om-btn-outline" id="om-backup-cleanup-scan" style="width:100%;margin-top:10px"><i class="fa-solid fa-rotate"></i> 重新扫描</button>',
+            '<button class="om-btn om-btn-danger" id="om-backup-cleanup-delete" style="width:100%;margin-top:6px" disabled><i class="fa-solid fa-shield-halved"></i> 等待扫描结果</button>',
+            '<div class="om-divider"></div>',
+            '<div class="om-sec-title"><i class="fa-solid fa-shield-halved" style="margin-right:5px"></i>③ 打开酒馆清理工具</div>',
+            '<div class="om-storage-info" style="line-height:1.65;border-color:#dc2626;background:rgba(220,38,38,.12);color:#ef4444;font-weight:700">严重警告：建议只处理 Settings Backups！！酒馆清理工具中的删除无法恢复！！</div>',
+            '<button class="om-btn om-btn-safe" id="om-backup-cleanup-open" style="width:100%;margin-top:10px"><i class="fa-solid fa-screwdriver-wrench"></i> 打开酒馆清理工具</button>',
+            '<div id="om-data-maid-open-status" class="om-hint" style="line-height:1.5;margin-top:8px"></div>'
+        ].join(''));
+        sheet.setAttribute('data-om-migration-sheet', '1');
+        sheet.querySelector('#om-migration-close').addEventListener('click', function () { closeSheet(sheet); });
+        sheet.querySelector('#om-migration-start').addEventListener('click', function () {
+            if (imageMigrationRun && imageMigrationRun.status === 'save_failed') {
+                retryImageMigrationSave();
+                return;
+            }
+            var current = getLegacyImageMigrationStats(load());
+            if (current.count === 0) { updateImageMigrationUI(); return; }
+            if (!confirm('开始迁移 ' + current.count + ' 条历史图片记录？\n\n每张图片只有在上传并读取验证成功后才会删除 base64。')) return;
+            startImageMigration();
+        });
+        sheet.querySelector('#om-migration-stop').addEventListener('click', requestStopImageMigration);
+        var repairBtn = sheet.querySelector('#om-migration-repair');
+        if (repairBtn) repairBtn.addEventListener('click', function () {
+            if (!confirm('确认使用角色「' + repairCandidate.donorName + '」的对应图片，修复「' + repairCandidate.targetName + '」的 ' + repairCandidate.pairs.length + ' 件衣服？\n\n只会修改图片引用，不会改变名称、描述、分类或当前穿着。')) return;
+            repairBtn.disabled = true;
+            var statusEl = sheet.querySelector('#om-migration-repair-status');
+            if (statusEl) statusEl.textContent = '正在修复并保存共享设置…';
+            repairDuplicateCharacterImageRefs(repairCandidate, function (err, count) {
+                if (err) {
+                    repairBtn.disabled = false;
+                    if (statusEl) statusEl.textContent = '修复失败：' + err;
+                    toast('图片映射修复失败：' + err, true);
+                    return;
+                }
+                if (statusEl) statusEl.textContent = '已修复 ' + count + ' 件图片映射。刷新后仍会保持。';
+                repairBtn.textContent = '修复完成';
+                renderGrid();
+                refreshSettingsBackupSummaries();
+                toast('✅ 已修复「' + repairCandidate.targetName + '」的 ' + count + ' 件图片');
+            });
+        });
+        sheet.querySelector('#om-backup-cleanup-scan').addEventListener('click', function () {
+            scanSettingsBackupSummary(sheet);
+        });
+        sheet.querySelector('#om-backup-cleanup-delete').addEventListener('click', function () {
+            deleteRecommendedSettingsBackups(sheet, this);
+        });
+        sheet.querySelector('#om-backup-cleanup-open').addEventListener('click', function () {
+            openNativeDataMaidFromMigration(sheet);
+        });
+        updateImageMigrationUI();
+        scanSettingsBackupSummary(sheet);
+    }
+
     function openSettingsSheet() {
         var d = load();
         var outfitCount = countAllOutfits(d);
@@ -4172,6 +5267,7 @@ function renderQuickScenes(d) {
             '<div class="om-divider"></div>',
             '<div class="om-sec-title">数据</div>',
             '<div class="om-storage-info">' + outfitCount + ' 套穿搭 / ' + imgCount + ' 张图片 / ' + (d.presets ? d.presets.length : 0) + ' 个预设 | 酒馆共享存储</div>',
+            '<button class="om-btn om-btn-outline" id="om-migrate-images" style="width:100%;text-align:left;margin-top:8px"><i class="fa-solid fa-images" style="margin-right:7px"></i>迁移历史 base64 图片…</button>',
             '<div class="om-btn-row" style="margin-top:8px">',
             '<button class="om-btn om-btn-outline" id="om-exp"><i class="fa-solid fa-download"></i> 导出</button>',
             '<button class="om-btn om-btn-outline" id="om-imp"><i class="fa-solid fa-upload"></i> 导入</button>',
@@ -4244,10 +5340,15 @@ function renderQuickScenes(d) {
             closeSheet(sheet);
             setTimeout(importData, 0);
         });
+        sheet.querySelector('#om-migrate-images').addEventListener('click', function () {
+            closeSheet(sheet);
+            setTimeout(openImageMigrationSheet, 0);
+        });
         sheet.querySelector('#om-clear').addEventListener('click', function () {
             var dd = load();
             var label = dd.currentView === 'char' && dd.currentChar ? '「' + dd.currentChar + '」的穿搭' : 'User 的穿搭';
             if (!confirm('确定清空' + label + '？（其他数据不受影响）')) return;
+            var removedOutfits = getViewOutfits(dd).slice();
             if (dd.currentView === 'char' && dd.currentChar) {
                 var cd = getCharData(dd, dd.currentChar);
                 cd.outfits = []; cd.categories = []; cd.activeIds = [];
@@ -4255,6 +5356,9 @@ function renderQuickScenes(d) {
                 dd.outfits = []; dd.categories = []; dd.activeIds = [];
             }
             save(dd); closeSheet(sheet); renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); toast('已清空');
+            deleteUnusedOutfitImageAssets(dd, removedOutfits, function (result) {
+                if (result.failed > 0) toast('衣柜已清空，但有 ' + result.failed + ' 张服务器图片清理失败', true);
+            });
         });
         sheet.querySelector('#om-open-cats').addEventListener('click', function () {
             closeSheet(sheet); openCatsSheet();
@@ -4380,6 +5484,22 @@ function renderQuickScenes(d) {
         } catch (e) { toast('导出失败：' + e.message, true); }
     }
 
+    function cloneExportPayload(data, includeInlineImages) {
+        var cloned = JSON.parse(JSON.stringify(data || {}));
+        if (includeInlineImages) return cloned;
+        function stripInlineImages(obj) {
+            if (!obj || typeof obj !== 'object') return;
+            if (Array.isArray(obj)) {
+                obj.forEach(stripInlineImages);
+                return;
+            }
+            if (Object.prototype.hasOwnProperty.call(obj, 'imageData')) delete obj.imageData;
+            Object.keys(obj).forEach(function (k) { stripInlineImages(obj[k]); });
+        }
+        stripInlineImages(cloned);
+        return cloned;
+    }
+
     function exportData() {
         var d = load();
         var isCharView = d.currentView === 'char' && d.currentChar;
@@ -4399,6 +5519,7 @@ function renderQuickScenes(d) {
 
         modal.innerHTML = '<div class="om-modal-box">' +
             '<div class="om-modal-title"><i class="fa-solid fa-download" style="margin-right:6px"></i>导出数据</div>' +
+            '<label class="om-checkrow" style="align-items:flex-start;margin-bottom:4px"><input type="checkbox" id="om-exp-images" checked><span><b>包含图片 base64</b><br><small style="opacity:.6">取消后只保留 imageRef/imageUrl；旧格式 base64 图片不会写进导出 JSON。</small></span></label>' +
             '<button class="om-modal-btn" id="om-exp-all"><i class="fa-solid fa-database" style="margin-right:8px"></i>导出完整备份<br><small style="opacity:.6;font-weight:400">User+角色+预设+设置</small></button>' +
             '<button class="om-modal-btn" id="om-exp-user"><i class="fa-solid fa-shirt" style="margin-right:8px"></i>仅导出 User 穿搭<br><small style="opacity:.6;font-weight:400">User的穿搭+分类</small></button>' +
             charBtns +
@@ -4411,34 +5532,38 @@ function renderQuickScenes(d) {
 
         // 导出完整备份
         document.getElementById('om-exp-all').addEventListener('click', function () {
+            var includeImages = !!(document.getElementById('om-exp-images') || {}).checked;
             _mp.removeChild(modal);
-            doExport(d, 'outfit-mgr-backup-' + new Date().toISOString().slice(0, 10) + '.json');
+            doExport(cloneExportPayload(d, includeImages), 'outfit-mgr-backup-' + new Date().toISOString().slice(0, 10) + '.json');
             toast('✅ 已导出完整数据');
         });
 
         // 导出User穿搭
         document.getElementById('om-exp-user').addEventListener('click', function () {
+            var includeImages = !!(document.getElementById('om-exp-images') || {}).checked;
             _mp.removeChild(modal);
-            doExport({ type: 'user', outfits: d.outfits, categories: d.categories }, 'outfit-mgr-user-' + new Date().toISOString().slice(0, 10) + '.json');
+            doExport(cloneExportPayload({ type: 'user', outfits: d.outfits, categories: d.categories }, includeImages), 'outfit-mgr-user-' + new Date().toISOString().slice(0, 10) + '.json');
             toast('✅ 已导出 User 穿搭');
         });
 
         // 导出当前角色
         var expCharOne = document.getElementById('om-exp-char-one');
         if (expCharOne) expCharOne.addEventListener('click', function () {
+            var includeImages = !!(document.getElementById('om-exp-images') || {}).checked;
             _mp.removeChild(modal);
             var cd = getCharData(d, d.currentChar);
-            doExport({ type: 'char', charName: d.currentChar, outfits: cd.outfits, categories: cd.categories }, 'outfit-mgr-char-' + d.currentChar + '-' + new Date().toISOString().slice(0, 10) + '.json');
+            doExport(cloneExportPayload({ type: 'char', charName: d.currentChar, outfits: cd.outfits, categories: cd.categories }, includeImages), 'outfit-mgr-char-' + d.currentChar + '-' + new Date().toISOString().slice(0, 10) + '.json');
             toast('✅ 已导出「' + d.currentChar + '」');
         });
 
         // 导出全部角色
         var expCharAll = document.getElementById('om-exp-char-all');
         if (expCharAll) expCharAll.addEventListener('click', function () {
+            var includeImages = !!(document.getElementById('om-exp-images') || {}).checked;
             _mp.removeChild(modal);
             var charExport = { type: 'chars_all', charNames: d.charNames, chars: {} };
             (d.charNames || []).forEach(function (cn) { charExport.chars[cn] = getCharData(d, cn); });
-            doExport(charExport, 'outfit-mgr-all-chars-' + new Date().toISOString().slice(0, 10) + '.json');
+            doExport(cloneExportPayload(charExport, includeImages), 'outfit-mgr-all-chars-' + new Date().toISOString().slice(0, 10) + '.json');
             toast('✅ 已导出全部角色（' + d.charNames.length + '个）');
         });
     }
@@ -4924,38 +6049,41 @@ function renderQuickScenes(d) {
         var maxRetries = 4;
         if (!apiCfg.endpoint || !apiCfg.key || !apiCfg.model) { cb('API 未配置完整'); return; }
         var endpoint = normalizeEndpoint(apiCfg.endpoint, 'chat');
-        var content = [
-            { type: 'image_url', image_url: { url: image.dataUrl } },
-            { type: 'text', text: '请描述这套穿搭：' + image.name }
-        ];
-        var body = {
-            model: apiCfg.model,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: content }
-            ],
-            max_tokens: 1024
-        };
-        try {
-            fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiCfg.key },
-                body: JSON.stringify(body)
-            }).then(function (r) {
-                if (!r.ok) { if (r.status === 429 && retryCount < maxRetries) { var delay = (retryCount + 1) * 5000; setTimeout(function () { callVisionAPI(apiCfg, image, systemPrompt, cb, retryCount + 1); }, delay); return; } return r.text().then(function (t) { cb('HTTP ' + r.status + ': ' + (t || '').substring(0, 200)); }); }
-                return r.json();
-            }).then(function (data) {
-            var text = '';
-            if (data.choices && data.choices[0]) {
-                var msg = data.choices[0].message;
-                text = msg ? (msg.content || '') : '';
-            } else if (data.candidates && data.candidates[0]) {
-                var parts = data.candidates[0].content && data.candidates[0].content.parts;
-                if (parts) text = parts.map(function (p) { return p.text || ''; }).join('');
-            }
-            cb(null, text.trim());
-            }).catch(function (e) { cb('请求失败：' + (e.message || '网络错误')); });
-        } catch (e) { cb('请求异常：' + e.message); }
+        localImageRefToDataUrl(image.dataUrl, function (imgErr, dataUrl) {
+            if (imgErr) { cb(imgErr); return; }
+            var content = [
+                { type: 'image_url', image_url: { url: dataUrl } },
+                { type: 'text', text: '请描述这套穿搭：' + image.name }
+            ];
+            var body = {
+                model: apiCfg.model,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: content }
+                ],
+                max_tokens: 1024
+            };
+            try {
+                fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiCfg.key },
+                    body: JSON.stringify(body)
+                }).then(function (r) {
+                    if (!r.ok) { if (r.status === 429 && retryCount < maxRetries) { var delay = (retryCount + 1) * 5000; setTimeout(function () { callVisionAPI(apiCfg, image, systemPrompt, cb, retryCount + 1); }, delay); return; } return r.text().then(function (t) { cb('HTTP ' + r.status + ': ' + (t || '').substring(0, 200)); }); }
+                    return r.json();
+                }).then(function (data) {
+                var text = '';
+                if (data.choices && data.choices[0]) {
+                    var msg = data.choices[0].message;
+                    text = msg ? (msg.content || '') : '';
+                } else if (data.candidates && data.candidates[0]) {
+                    var parts = data.candidates[0].content && data.candidates[0].content.parts;
+                    if (parts) text = parts.map(function (p) { return p.text || ''; }).join('');
+                }
+                cb(null, text.trim());
+                }).catch(function (e) { cb('请求失败：' + (e.message || '网络错误')); });
+            } catch (e) { cb('请求异常：' + e.message); }
+        });
     }
 
     function batchGenerateDescriptions(outfitIds, progressCb, doneCb) {
@@ -5191,7 +6319,7 @@ function renderQuickScenes(d) {
                     allTextParts.push(wt);
                 }
                 if (useImg) {
-                    var imgOutfits = active.filter(function (o) { return hasOutfitImage(o); });
+                    var imgOutfits = active.filter(function (o) { return hasInjectableOutfitImage(o); });
                     if (imgOutfits.length > 0) ownerImageGroups.push({ name: ow.name, outfits: imgOutfits, isMulti: true });
                 }
             } else {
@@ -5203,7 +6331,7 @@ function renderQuickScenes(d) {
                         .replace('{{description}}', desc2);
                     allTextParts.push(st);
                 }
-                if (useImg && hasOutfitImage(o)) { ownerImageGroups.push({ name: ow.name, outfits: [o], isMulti: false }); }
+                if (useImg && hasInjectableOutfitImage(o)) { ownerImageGroups.push({ name: ow.name, outfits: [o], isMulti: false }); }
             }
         });
 

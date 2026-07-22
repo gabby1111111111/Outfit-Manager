@@ -451,9 +451,92 @@ Scene generation uses `ctx.generateRaw`.
 Image analysis uses OpenAI-compatible `chat/completions` with image content.
 
 Read outfit images through `resolveOutfitImage(outfit)` / `hasOutfitImage()`,
-not by checking `outfit.imageData` directly. `imageData` is the current legacy
-inline/base64 field; future server-cached images should use lightweight
-references such as `imageRef` / `imageUrl` while old data keeps working.
+not by checking `outfit.imageData` directly. `imageData` is the legacy
+inline/base64 field; new image writes should go through
+`saveOutfitImageAsset()` / `setOutfitImageFields()` so they can be stored in
+SillyTavern `user/images/Outfit-Manager` and referenced by `imageRef` /
+`imageUrl`. If server caching fails, keep the base64 fallback so old data and
+offline/local setups still work.
+
+New reference-based writes do not migrate legacy inline images. Any migration
+tool must upload and verify each image before removing that outfit's
+`imageData`, support retry after partial failure, then force-save shared
+settings so old users actually receive the size reduction.
+
+When a legacy record contains both `imageData` and `imageRef/imageUrl`, treat
+the base64 `imageData` as the migration source of truth. A readable existing
+reference is not proof that it belongs to that outfit: old imports may have
+copied one placeholder reference onto hundreds of records. Re-upload and verify
+the base64 instead of accepting the old reference by path availability alone.
+
+If migration exposes a wardrobe where most outfits share one image reference,
+repair only from a clearly matching donor wardrobe. Require the same index plus
+exact name, description, category, and type for at least 95% of the affected
+records; never repair by fuzzy name matching alone.
+
+The built-in migration entry lives under Settings -> Data and scans User,
+character, preset, and persisted `virtualOutfits` records. Its runtime evidence
+is exposed at `window.__outfitManagerAudit.image_migration`. It checkpoints
+without repeatedly rewriting the localStorage backup, and performs one final
+awaited shared-settings save plus browser backup write when stopped or finished.
+
+After migration, old SillyTavern settings backups still contain the earlier
+large inline wardrobe and do not shrink automatically. OM may summarize
+`report.settingsBackups` through `/api/data-maid/report`, finalize the temporary
+report token through `/api/data-maid/finalize`, and open SillyTavern's native
+Data Maid via `#data_maid_button`. Never silently remove backups. A user-triggered
+bulk cleanup may call `/api/data-maid/delete` only after a fresh report, the
+conservative size-split classification below, and an explicit final confirmation.
+Submit only hashes taken from the report's `settingsBackups` candidates; never
+submit hashes from any other Data Maid category. Runtime evidence is exposed at
+`window.__outfitManagerAudit.backup_cleanup` and `backup_cleanup_delete`.
+
+Keep the migration sheet in three distinct sections: image migration; backup
+scan/results plus the guarded bulk-delete button; and a separate native Data
+Maid launcher with a prominent irreversible-deletion warning. The bulk-delete
+button stays disabled until a successful scan finds conservative candidates and
+must fetch a fresh report again before confirmation and deletion.
+
+Data Maid can classify OM wardrobe assets under its general `Images` category
+because they are not referenced by chat messages. The migration cleanup guide
+must tell users to operate only on `Settings Backups` and not delete `Images`;
+otherwise newly migrated wardrobe assets may be removed.
+
+When OM opens Data Maid, hide and remove only `.dataMaidDeleteAll`, the
+category-level Delete All broom. Keep `.dataMaidItemDelete`, the per-file trash
+button, available. Use both a CSS guard and a DOM observer because Data Maid
+renders categories after its Scan action. Do not modify SillyTavern core files.
+
+Backup cleanup recommendations must be conservative and explain exact files.
+Always keep the newest settings backup. Only classify older files as
+pre-migration backups when they are both at least twice the newest backup size
+and at least 10 MiB larger. Keep the newest file in that large group as the
+pre-migration recovery point, list only the remaining large files as suggested
+cleanup, and show no deletion recommendation when there is no clear size split.
+OM's guarded bulk action may delete the recommended candidates after its own
+fresh scan and confirmation. In native Data Maid, users should delete files
+individually; never expose or direct them to the category-level Delete All action.
+
+Do not assume `SillyTavern.getContext()` exposes `saveSettings()`. Some current
+ST builds expose `saveSettingsDebounced()` on the context while the awaitable
+`saveSettings()` is only exported by `/script.js`. Migration finalization should
+use the context function when present, otherwise dynamically import `/script.js`
+and await its exported `saveSettings()`; debounced saving is only the fallback.
+
+Server image deletion is reference-aware. Before calling
+`deleteOutfitImageAsset()`, use `deleteUnusedOutfitImageAssets()` so deleting or
+replacing one outfit does not break copied outfits or presets that still share
+the same `imageRef`.
+
+Export flows should use `cloneExportPayload(data, includeInlineImages)`.
+Default exports can include images for full backups; cloud/server transfer
+exports may disable inline `imageData` and keep only lightweight references.
+
+Vision description calls can convert local `user/images/...` refs to data URLs
+with `localImageRefToDataUrl()`. Normal chat request injection is synchronous:
+only inject image blocks when the image is already a data URL or http(s) URL;
+local lightweight refs should be skipped for image blocks and covered by text
+injection instead.
 
 ## External Frontend / Chatu8 Bridge
 
