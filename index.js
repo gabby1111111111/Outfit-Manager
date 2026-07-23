@@ -20,6 +20,7 @@
     var IMG_QUALITY = 0.75;
     var FAB_ID = 'om-fab-main';
     var UI_LAYOUT_KEY = 'outfit_mgr_ui_layout_v1';
+    var IMAGE_MIGRATION_JOURNAL_KEY = 'outfit_mgr_image_migration_journal_v1';
     var POPUP_MIN_W = 360;
     var POPUP_MIN_H = 440;
     var POPUP_MARGIN = 12;
@@ -710,10 +711,7 @@
                     return { size: chunk.value.byteLength, type: type };
                 });
             }
-            return res.blob().then(function (blob) {
-                if (!blob || blob.size <= 0) throw new Error('图片验证失败：文件为空');
-                return { size: blob.size, type: blob.type || type };
-            });
+            throw new Error('当前浏览器不支持低内存图片验证，已保留原 base64');
         }).then(function (result) {
             cb(null, result);
         }).catch(function (err) {
@@ -742,21 +740,21 @@
 
     function collectStoredOutfitRecords(d) {
         var records = [];
-        function addList(list, owner, source) {
+        function addList(list, owner, source, collectionKey) {
             (list || []).forEach(function (outfit, index) {
-                if (outfit && typeof outfit === 'object') records.push({ outfit: outfit, owner: owner, source: source, index: index });
+                if (outfit && typeof outfit === 'object') records.push({ outfit: outfit, owner: owner, source: source, collectionKey: collectionKey, index: index });
             });
         }
-        addList(d && d.outfits, 'User', 'user');
+        addList(d && d.outfits, 'User', 'user', 'user');
         Object.keys((d && d.chars) || {}).forEach(function (cn) {
-            addList(d.chars[cn] && d.chars[cn].outfits, cn, 'char');
+            addList(d.chars[cn] && d.chars[cn].outfits, cn, 'char', 'char:' + cn);
         });
         ((d && d.presets) || []).forEach(function (preset, presetIndex) {
-            addList(preset && preset.outfits, '预设：' + ((preset && preset.name) || (presetIndex + 1)), 'preset');
+            addList(preset && preset.outfits, '预设：' + ((preset && preset.name) || (presetIndex + 1)), 'preset', 'preset:' + presetIndex);
         });
         Object.keys((d && d.virtualOutfits) || {}).forEach(function (id) {
             var outfit = d.virtualOutfits[id];
-            if (outfit && typeof outfit === 'object') records.push({ outfit: outfit, owner: '临时穿搭', source: 'virtual', index: id });
+            if (outfit && typeof outfit === 'object') records.push({ outfit: outfit, owner: '临时穿搭', source: 'virtual', collectionKey: 'virtual', index: id });
         });
         return records;
     }
@@ -780,6 +778,91 @@
     function estimateImageDataBytes(imageData) {
         var parts = getImageDataParts(imageData);
         return parts ? Math.floor(parts.base64.length * 3 / 4) : 0;
+    }
+
+    function getImageMigrationSignature(imageData) {
+        var text = String(imageData || '');
+        var hash = 2166136261;
+        var step = Math.max(1, Math.floor(text.length / 256));
+        for (var i = 0; i < text.length; i += step) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+        return text.length + ':' + (hash >>> 0).toString(16);
+    }
+
+    function getImageMigrationRecordKey(record) {
+        var outfit = record && record.outfit;
+        return JSON.stringify([
+            String(record && record.source || ''),
+            String(record && record.collectionKey || record && record.owner || ''),
+            String(record && record.index !== undefined ? record.index : ''),
+            String(outfit && outfit.id || '')
+        ]);
+    }
+
+    function loadImageMigrationJournal() {
+        try {
+            var raw = localStorage.getItem(IMAGE_MIGRATION_JOURNAL_KEY);
+            var parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (e) { return []; }
+    }
+
+    function saveImageMigrationJournal(entries) {
+        try {
+            if (!entries || entries.length === 0) localStorage.removeItem(IMAGE_MIGRATION_JOURNAL_KEY);
+            else localStorage.setItem(IMAGE_MIGRATION_JOURNAL_KEY, JSON.stringify(entries));
+            return true;
+        } catch (e) { return false; }
+    }
+
+    function appendImageMigrationJournal(target, sourceImage, asset) {
+        var entries = loadImageMigrationJournal();
+        var key = target.journalKey || getImageMigrationRecordKey(target);
+        var next = {
+            key: key,
+            signature: getImageMigrationSignature(sourceImage),
+            imageRef: asset.imageRef || asset.imageUrl,
+            imageUrl: asset.imageUrl || asset.imageRef
+        };
+        var replaced = false;
+        entries = entries.map(function (entry) {
+            if (entry && entry.key === key) { replaced = true; return next; }
+            return entry;
+        });
+        if (!replaced) entries.push(next);
+        return saveImageMigrationJournal(entries);
+    }
+
+    function replayImageMigrationJournal(d) {
+        var entries = loadImageMigrationJournal();
+        if (entries.length === 0) return { replayed: 0, discarded: 0 };
+        var records = {};
+        collectStoredOutfitRecords(d).forEach(function (record) {
+            records[getImageMigrationRecordKey(record)] = record;
+        });
+        var keep = [];
+        var replayed = 0;
+        var discarded = 0;
+        entries.forEach(function (entry) {
+            var record = entry && records[entry.key];
+            var outfit = record && record.outfit;
+            var ref = normalizeOutfitImageRef(entry && (entry.imageRef || entry.imageUrl));
+            if (!outfit || !/^user\/images\//i.test(ref)) { discarded++; return; }
+            if (!isImageDataUrl(outfit.imageData)) {
+                if (normalizeOutfitImageRef(outfit.imageRef || outfit.imageUrl) !== ref) discarded++;
+                return;
+            }
+            if (getImageMigrationSignature(outfit.imageData) !== entry.signature) { discarded++; return; }
+            outfit.imageRef = entry.imageRef || entry.imageUrl;
+            outfit.imageUrl = entry.imageUrl || entry.imageRef;
+            delete outfit.imageData;
+            keep.push(entry);
+            replayed++;
+        });
+        saveImageMigrationJournal(keep);
+        return { replayed: replayed, discarded: discarded };
     }
 
     function formatStorageBytes(bytes) {
@@ -832,11 +915,21 @@
         forceSaveSillyTavernSettings(cb);
     }
 
-    function isLowMemoryMigrationDevice() {
+    function getImageMigrationDeviceProfile() {
         var nav = typeof navigator !== 'undefined' ? navigator : null;
         var memory = Number(nav && nav.deviceMemory) || 0;
         var ua = String((nav && nav.userAgent) || '');
-        return (memory > 0 && memory <= 4) || /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+        var mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+        if (memory > 0 && memory <= 2) return { mode: 'extreme', label: '极低内存', countLimit: 10, byteLimit: 8 * 1024 * 1024, yieldMs: 500 };
+        if (mobile || (memory > 0 && memory <= 4)) return { mode: 'low', label: '手机 / 低内存', countLimit: 25, byteLimit: 24 * 1024 * 1024, yieldMs: 250 };
+        return { mode: 'normal', label: '普通电脑', countLimit: 100, byteLimit: 128 * 1024 * 1024, yieldMs: 100 };
+    }
+
+    function hasCriticalImageMigrationMemoryPressure() {
+        try {
+            var memory = typeof performance !== 'undefined' && performance.memory;
+            return !!(memory && memory.jsHeapSizeLimit > 0 && memory.usedJSHeapSize / memory.jsHeapSizeLimit >= 0.88);
+        } catch (e) { return false; }
     }
 
     function forceSaveSillyTavernSettings(cb) {
@@ -900,8 +993,16 @@
             migrated: run ? run.migrated : 0,
             failed: run ? run.failed : 0,
             remaining: remaining,
-            low_memory: !!(run && run.lowMemory),
-            batch_size: run ? run.batchLimit : 0,
+            low_memory: !!(run && run.profile && run.profile.mode !== 'normal'),
+            device_mode: run && run.profile ? run.profile.mode : null,
+            checkpoint_count: run ? run.checkpointCount : 0,
+            checkpoint_item_limit: run && run.profile ? run.profile.countLimit : 0,
+            checkpoint_byte_limit: run && run.profile ? run.profile.byteLimit : 0,
+            checkpoint_items: run ? run.batchProcessed : 0,
+            checkpoint_bytes: run ? run.batchBytes : 0,
+            journal_replayed: run ? run.journalReplayed : 0,
+            journal_write_failed: run ? run.journalWriteFailed : 0,
+            memory_pressure: !!(run && run.memoryPressure),
             error: error || null
         };
         audit.last_error = error || null;
@@ -1241,13 +1342,16 @@
             if (run) {
                 var pct = run.total > 0 ? Math.round(run.processed * 100 / run.total) : 100;
                 if (progressEl) progressEl.style.width = pct + '%';
-                if (detailEl) detailEl.textContent = '已处理 ' + run.processed + ' / ' + run.total + '，成功 ' + run.migrated + '，失败 ' + run.failed + '；仍有 ' + stats.count + ' 条 base64 记录。';
+                if (detailEl) detailEl.textContent = '已处理 ' + run.processed + ' / ' + run.total + '，成功 ' + run.migrated + '，失败 ' + run.failed + '；仍有 ' + stats.count + ' 条 base64 记录；已保存 ' + run.checkpointCount + ' 个检查点。';
                 if (statusEl) {
-                    if (run.running && run.stopRequested) statusEl.textContent = '正在停止：当前图片完成后保存进度。';
-                    else if (run.running) statusEl.textContent = (run.lowMemory ? '低内存批次迁移中：' : '迁移进行中：') + (run.currentName || '准备下一张图片…');
+                    if (run.checkpointing) statusEl.textContent = '正在保存迁移检查点（第 ' + (run.checkpointCount + 1) + ' 次）…';
+                    else if (run.running && run.stopRequested) statusEl.textContent = '正在停止：当前图片完成后保存进度。';
+                    else if (run.running) statusEl.textContent = run.profile.label + '模式迁移中：' + (run.currentName || '准备下一张图片…');
                     else if (run.status === 'success') statusEl.textContent = '迁移完成。';
                     else if (run.status === 'save_failed') statusEl.textContent = '图片已迁移，但共享设置强制保存失败；请重试保存。';
-                    else if (run.status === 'stopped') statusEl.textContent = run.batchComplete ? '本批已安全保存。建议刷新页面释放内存后继续。' : '已停止并保存当前进度，可随时继续。';
+                    else if (run.status === 'memory_pressure') statusEl.textContent = '检测到浏览器内存压力，已保存并安全暂停；释放其他页面后可继续。';
+                    else if (run.status === 'failure_pause') statusEl.textContent = '连续图片迁移失败，已保存并暂停；请检查服务器或网络后重试。';
+                    else if (run.status === 'stopped') statusEl.textContent = '已停止并保存当前进度，可随时继续。';
                     else statusEl.textContent = '本轮部分完成；失败图片保留了原 base64，可重试。';
                 }
                 if (startBtn) {
@@ -1273,19 +1377,21 @@
         var reuseKey = target.migrationKey || '';
         if (run.reuseKey !== reuseKey) {
             run.reuseKey = reuseKey;
-            run.reuseSource = null;
+            run.reuseSignature = null;
             run.reuseAsset = null;
         }
+        var sourceSignature = getImageMigrationSignature(sourceImage);
 
         function applyVerifiedAsset(asset) {
             if (outfit.imageData !== sourceImage) { cb('图片在迁移过程中被修改，已保留新内容'); return; }
+            if (!appendImageMigrationJournal(target, sourceImage, asset)) run.journalWriteFailed++;
             outfit.imageRef = asset.imageRef || asset.imageUrl;
             outfit.imageUrl = asset.imageUrl || asset.imageRef;
             delete outfit.imageData;
             cb(null, true);
         }
 
-        if (run.reuseAsset && run.reuseSource === sourceImage) {
+        if (run.reuseAsset && run.reuseSignature === sourceSignature) {
             applyVerifiedAsset(run.reuseAsset);
             return;
         }
@@ -1299,7 +1405,7 @@
                         deleteOutfitImageAsset(asset, function () { cb(verifyErr); });
                         return;
                     }
-                    run.reuseSource = sourceImage;
+                    run.reuseSignature = sourceSignature;
                     run.reuseAsset = asset;
                     applyVerifiedAsset(asset);
                 });
@@ -1311,15 +1417,66 @@
         uploadFresh();
     }
 
+    function resetImageMigrationCheckpoint(run) {
+        run.batchProcessed = 0;
+        run.batchBytes = 0;
+        run.checkpointing = false;
+        run.reuseKey = '';
+        run.reuseSignature = null;
+        run.reuseAsset = null;
+    }
+
+    function pauseImageMigrationAfterCheckpoint(run, status, message) {
+        run.running = false;
+        run.status = status;
+        run.currentName = '';
+        run.targets = [];
+        setImageMigrationAudit(run, status === 'failure_pause' ? 'fail' : status, message || null);
+        updateImageMigrationUI();
+        refreshSettingsBackupSummaries();
+        toast(message || '迁移已安全暂停，可稍后继续', status === 'failure_pause');
+    }
+
+    function checkpointAndContinueImageMigration(run, pauseStatus, pauseMessage) {
+        if (!run.running || run.checkpointing) return;
+        run.checkpointing = true;
+        updateImageMigrationUI();
+        persistImageMigrationCheckpoint(run.data, true, function (saveErr) {
+            run.checkpointing = false;
+            if (saveErr) {
+                run.running = false;
+                run.status = 'save_failed';
+                run.errors.push('保存检查点：' + saveErr);
+                setImageMigrationAudit(run, 'save_failed', saveErr);
+                updateImageMigrationUI();
+                toast('迁移检查点保存失败，已暂停：' + saveErr, true);
+                return;
+            }
+            saveImageMigrationJournal([]);
+            run.checkpointCount++;
+            resetImageMigrationCheckpoint(run);
+            if (pauseStatus) {
+                pauseImageMigrationAfterCheckpoint(run, pauseStatus, pauseMessage);
+                return;
+            }
+            setImageMigrationAudit(run, 'running', null);
+            updateImageMigrationUI();
+            setTimeout(function () { continueImageMigration(run); }, run.profile.yieldMs);
+        });
+    }
+
     function finishImageMigration(run, status) {
         run.running = false;
         run.status = status;
+        run.checkpointing = true;
+        updateImageMigrationUI();
         persistImageMigrationCheckpoint(run.data, true, function (saveErr) {
+            run.checkpointing = false;
             var remaining = getLegacyImageMigrationTargets(run.data).length;
             function completeFinish(backupErr) {
                 var finalSaveErr = saveErr || backupErr;
                 var error = finalSaveErr || (run.errors.length > 0 ? run.errors[run.errors.length - 1] : null);
-                run.reuseSource = null;
+                run.reuseSignature = null;
                 run.reuseAsset = null;
                 run.targets = [];
                 if (finalSaveErr) run.status = 'save_failed';
@@ -1330,11 +1487,11 @@
                 refreshSettingsBackupSummaries();
                 renderGrid();
                 if (run.status === 'success') toast('✅ 历史图片迁移完成，共迁移 ' + run.migrated + ' 条记录');
-                else if (run.status === 'stopped' && run.batchComplete) toast('本批已安全保存。请刷新页面释放内存，再继续迁移');
                 else if (run.status === 'stopped') toast('已停止迁移并保存当前进度');
                 else if (run.status === 'save_failed') toast('图片已迁移，但共享设置保存失败：' + finalSaveErr, true);
                 else toast('迁移部分完成：成功 ' + run.migrated + '，失败 ' + run.failed + '；可再次重试', true);
             }
+            if (!saveErr) saveImageMigrationJournal([]);
             if (!saveErr && remaining === 0) {
                 saveToDB(run.data, function () { completeFinish(null); }, { skipShared: true, skipLocalBackup: false });
             } else completeFinish(null);
@@ -1346,17 +1503,23 @@
         if (!run || run.status !== 'save_failed' || run.running) return;
         run.running = true;
         run.status = 'running';
+        run.checkpointing = true;
         updateImageMigrationUI();
         persistImageMigrationCheckpoint(run.data, true, function (err) {
-            run.running = false;
+            run.checkpointing = false;
             if (err) {
+                run.running = false;
                 run.status = 'save_failed';
                 setImageMigrationAudit(run, 'save_failed', err);
                 toast('共享设置保存仍然失败：' + err, true);
             } else {
-                run.status = getLegacyImageMigrationTargets(run.data).length === 0 && run.failed === 0 ? 'success' : 'partial';
-                setImageMigrationAudit(run, run.status === 'partial' ? 'fail' : run.status, run.status === 'partial' ? (run.errors[run.errors.length - 1] || null) : null);
-                toast('✅ 迁移结果已强制保存到共享设置');
+                saveImageMigrationJournal([]);
+                run.checkpointCount++;
+                resetImageMigrationCheckpoint(run);
+                run.status = 'running';
+                setImageMigrationAudit(run, 'running', null);
+                toast('✅ 检查点已保存，迁移自动继续');
+                setTimeout(function () { continueImageMigration(run); }, run.profile.yieldMs);
             }
             updateImageMigrationUI();
             refreshSettingsBackupSummaries();
@@ -1375,51 +1538,65 @@
         updateImageMigrationUI();
         migrateOneLegacyImage(run, target, function (err, migrated) {
             run.processed++;
-            if (err) { run.failed++; run.errors.push(run.currentName + '：' + err); }
+            run.batchProcessed++;
+            if (err) {
+                run.failed++;
+                run.consecutiveFailures++;
+                run.errors.push(run.currentName + '：' + err);
+            }
             else if (migrated) {
                 run.migrated++;
+                run.consecutiveFailures = 0;
+                run.batchBytes += targetBytes;
                 run.remainingBytes = Math.max(0, run.remainingBytes - targetBytes);
             }
             setImageMigrationAudit(run, 'running', err || null);
             updateImageMigrationUI();
-            if (run.lowMemory && run.processed >= run.batchLimit) {
-                run.batchComplete = true;
-                finishImageMigration(run, 'stopped');
-                return;
-            }
             if (run.stopRequested || run.index >= run.targets.length) {
                 continueImageMigration(run);
                 return;
             }
-            if (run.processed % 20 === 0) {
-                persistImageMigrationCheckpoint(run.data, true, function (saveErr) {
-                    if (saveErr) { run.errors.push('保存检查点：' + saveErr); run.stopRequested = true; }
-                    setTimeout(function () { continueImageMigration(run); }, 50);
-                });
-            } else setTimeout(function () { continueImageMigration(run); }, 0);
+            run.memoryPressure = hasCriticalImageMigrationMemoryPressure();
+            if (run.memoryPressure) {
+                checkpointAndContinueImageMigration(run, 'memory_pressure', '检测到浏览器内存压力，当前进度已保存并暂停');
+                return;
+            }
+            if (run.consecutiveFailures >= 3) {
+                checkpointAndContinueImageMigration(run, 'failure_pause', '连续 3 张图片迁移失败，当前进度已保存；请检查服务器或网络后重试');
+                return;
+            }
+            if (run.batchProcessed >= run.profile.countLimit || run.batchBytes >= run.profile.byteLimit) {
+                checkpointAndContinueImageMigration(run, null, null);
+                return;
+            }
+            setTimeout(function () { continueImageMigration(run); }, 0);
         });
     }
 
     function startImageMigration() {
         if (imageMigrationRun && imageMigrationRun.running) return;
         var d = load();
+        var replay = replayImageMigrationJournal(d);
         var targets = getLegacyImageMigrationTargets(d);
-        if (targets.length === 0) { toast('没有需要迁移的历史 base64 图片'); updateImageMigrationUI(); return; }
+        if (targets.length === 0 && replay.replayed === 0) { toast('没有需要迁移的历史 base64 图片'); updateImageMigrationUI(); return; }
         var remainingBytes = 0;
         targets.forEach(function (target, index) {
             target.migrationKey = target.outfit.id ? 'id:' + target.outfit.id : 'record:' + index;
+            target.journalKey = getImageMigrationRecordKey(target);
             remainingBytes += estimateImageDataBytes(target.outfit.imageData);
         });
         targets.sort(function (a, b) { return a.migrationKey < b.migrationKey ? -1 : (a.migrationKey > b.migrationKey ? 1 : 0); });
-        var lowMemory = isLowMemoryMigrationDevice();
+        var profile = getImageMigrationDeviceProfile();
         imageMigrationRun = {
             runId: Date.now(), data: d, targets: targets, total: targets.length, index: 0,
             processed: 0, migrated: 0, failed: 0, errors: [], currentName: '',
-            remainingBytes: remainingBytes, stopRequested: false, running: true, status: 'running', reuseKey: '', reuseSource: null, reuseAsset: null,
-            lowMemory: lowMemory, batchLimit: lowMemory ? 5 : 20, batchComplete: false
+            remainingBytes: remainingBytes, stopRequested: false, running: true, status: 'running', reuseKey: '', reuseSignature: null, reuseAsset: null,
+            profile: profile, checkpointing: false, checkpointCount: 0, batchProcessed: 0, batchBytes: 0,
+            consecutiveFailures: 0, memoryPressure: false, journalReplayed: replay.replayed, journalWriteFailed: 0
         };
         setImageMigrationAudit(imageMigrationRun, 'running', null);
         updateImageMigrationUI();
+        if (replay.replayed > 0) toast('已从迁移日志恢复 ' + replay.replayed + ' 张已上传图片，避免重复上传');
         continueImageMigration(imageMigrationRun);
     }
 
@@ -5167,7 +5344,7 @@ function renderQuickScenes(d) {
             '<span class="om-settings-title-main"><i class="fa-solid fa-images"></i>历史图片安全迁移</span>' +
             '<button class="om-sheet-close" id="om-migration-close" type="button"><i class="fa-solid fa-xmark"></i>退出</button>' +
             '</div>',
-            '<div class="om-hint" style="line-height:1.6;margin-bottom:10px">逐张上传到 <code>user/images/Outfit-Manager</code>，并重新读取验证成功后才删除该条 <code>imageData</code>。失败图片会保留原 base64；停止后会强制保存当前进度。手机或低内存设备每批迁移 5 张并自动暂停，请刷新页面释放内存后继续。</div>',
+            '<div class="om-hint" style="line-height:1.6;margin-bottom:10px">逐张上传到 <code>user/images/Outfit-Manager</code>，验证成功后立即释放该条 <code>imageData</code>。迁移会根据设备内存和已释放字节自动保存检查点、让出事件循环并继续；通常只需点击一次。失败图片仍保留原 base64。</div>',
             '<div class="om-storage-info" id="om-migration-summary">待迁移 ' + stats.count + ' 条记录，估算原图数据 ' + formatStorageBytes(stats.estimatedBytes) + '。</div>',
             '<div style="height:8px;border-radius:999px;background:rgba(127,127,127,.18);overflow:hidden;margin:12px 0 8px"><div id="om-migration-progress" style="height:100%;width:0;background:#4caf50;transition:width .2s"></div></div>',
             '<div id="om-migration-status" style="font-size:.86em;font-weight:600;margin-bottom:5px"></div>',
@@ -5200,7 +5377,8 @@ function renderQuickScenes(d) {
             }
             var current = getLegacyImageMigrationStats(load());
             if (current.count === 0) { updateImageMigrationUI(); return; }
-            var batchNotice = isLowMemoryMigrationDevice() ? '\n\n当前为低内存模式：每批 5 张，保存后自动暂停；刷新页面再继续。' : '';
+            var profile = getImageMigrationDeviceProfile();
+            var batchNotice = '\n\n当前模式：' + profile.label + '；每 ' + profile.countLimit + ' 张或释放 ' + formatStorageBytes(profile.byteLimit) + ' 自动保存检查点并继续。';
             if (!confirm('开始迁移 ' + current.count + ' 条历史图片记录？\n\n每张图片只有在上传并读取验证成功后才会删除 base64。' + batchNotice)) return;
             startImageMigration();
         });

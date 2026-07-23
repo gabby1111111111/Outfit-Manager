@@ -481,13 +481,22 @@ without repeatedly rewriting the localStorage backup, performs an awaited shared
 settings save whenever stopped, and writes the browser backup only after all
 legacy images are migrated and the data is lightweight.
 
-On phones and low-memory devices, migration must run in small bounded batches
-(currently 5 images), force-save shared settings, then pause and ask the user to
-refresh before continuing. Do not clone the still-large wardrobe into IndexedDB
-or localStorage at intermediate checkpoints, do not trigger a full shared save
-after every image, and do not download the complete uploaded image merely to
-verify it. These operations can temporarily duplicate hundreds of MiB and cause
-Android/iOS to kill the local SillyTavern process or WebView.
+Migration checkpoints are adaptive and automatic. Normal computers checkpoint
+after 100 images or 128 MiB released; phones/low-memory devices after 25 images
+or 24 MiB; extreme low-memory devices after 10 images or 8 MiB. After an awaited
+shared save, yield the event loop and continue without user interaction. Pause
+only for a save failure, three consecutive image failures, explicit Stop, or a
+measured critical JS heap ratio.
+
+Before deleting a verified legacy `imageData`, write a tiny local migration
+journal containing only the record locator, a lightweight non-base64 signature,
+and the verified `imageRef`. Replay this journal on restart so an uploaded image
+does not need to be uploaded again, and clear it only after the corresponding
+shared-settings checkpoint succeeds. Never put base64 in this journal. Do not
+clone the still-large wardrobe into IndexedDB or localStorage at intermediate
+checkpoints, trigger a full shared save after every image, retain migrated base64
+strings in runtime reuse state, or download the complete uploaded image merely
+to verify it.
 
 After migration, old SillyTavern settings backups still contain the earlier
 large inline wardrobe and do not shrink automatically. OM may summarize
